@@ -1,0 +1,42 @@
+name: SimpleBoxer
+version: '${version}'
+main: me.vexmc.simpleboxer.SimpleBoxerPlugin
+api-version: '1.17'
+description: Virtual sparring players — player-identical bots with configurable ping, aim, CPS, movement and difficulty, built for combat-plugin testing.
+authors: [owengregson]
+website: https://github.com/owengregson/SimpleBoxer
+# Load after the combat stack so its knockback/hit-speed shaping is already
+# live when boot-time boxers spawn; runtime spawns never care.
+softdepend: [Mental, OldCombatMechanics]
+
+commands:
+  boxer:
+    description: SimpleBoxer root command — spawn, remove, target, pause, tune and inspect boxers.
+    aliases: [sb]
+    permission: simpleboxer.command.use
+
+permissions:
+  simpleboxer.*:
+    description: Grants every SimpleBoxer permission.
+    default: op
+    children:
+      simpleboxer.command.use: true
+      simpleboxer.command.spawn: true
+      simpleboxer.command.control: true
+      simpleboxer.command.tune: true
+      simpleboxer.command.reload: true
+  simpleboxer.command.use:
+    description: Use /boxer, help, list and inspection.
+    default: op
+  simpleboxer.command.spawn:
+    description: Spawn and remove boxers.
+    default: op
+  simpleboxer.command.control:
+    description: Set targets, pause and resume boxers.
+    default: op
+  simpleboxer.command.tune:
+    description: Change a boxer's ping, aim, CPS, w-tap and preset at runtime.
+    default: op
+  simpleboxer.command.reload:
+    description: Reload the configuration.
+    default: op

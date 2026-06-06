@@ -1,0 +1,7 @@
+name: SimpleBoxerTester
+version: '${version}'
+main: me.vexmc.simpleboxer.tester.SBTesterPlugin
+api-version: '1.17'
+description: In-server integration suite for SimpleBoxer — boots, runs, writes PASS/FAIL, shuts the server down.
+authors: [owengregson]
+depend: [SimpleBoxer]
