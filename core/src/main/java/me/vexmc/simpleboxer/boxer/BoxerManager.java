@@ -17,6 +17,7 @@ import me.vexmc.simpleboxer.api.event.BoxerRemoveEvent;
 import me.vexmc.simpleboxer.api.event.BoxerSpawnEvent;
 import me.vexmc.simpleboxer.common.scheduling.Scheduling;
 import me.vexmc.simpleboxer.common.scheduling.TaskHandle;
+import me.vexmc.simpleboxer.config.ConfigStore;
 import me.vexmc.simpleboxer.identity.SkinService;
 import me.vexmc.simpleboxer.identity.TabConcealer;
 import me.vexmc.simpleboxer.nms.CapturedPacket;
@@ -38,6 +39,7 @@ public final class BoxerManager implements BoxerService {
 
     private final JavaPlugin plugin;
     private final Scheduling scheduling;
+    private final ConfigStore config;
     private final NmsBridge bridge;
     private final PacketIO packetIO;
     private final SkinService skins;
@@ -46,10 +48,11 @@ public final class BoxerManager implements BoxerService {
     private final Map<String, BoxerImpl> byName = new ConcurrentHashMap<>();
     private final Map<UUID, TaskHandle> tickTasks = new ConcurrentHashMap<>();
 
-    public BoxerManager(@NotNull JavaPlugin plugin, @NotNull Scheduling scheduling)
-            throws ReflectiveOperationException {
+    public BoxerManager(@NotNull JavaPlugin plugin, @NotNull Scheduling scheduling,
+            @NotNull ConfigStore config) throws ReflectiveOperationException {
         this.plugin = plugin;
         this.scheduling = scheduling;
+        this.config = config;
         this.bridge = new NmsBridge(plugin);
         this.packetIO = new PacketIO(bridge);
         this.skins = new SkinService(scheduling, plugin.getDataFolder().toPath(), plugin.getLogger());
@@ -142,13 +145,15 @@ public final class BoxerManager implements BoxerService {
         spawned.player().setFoodLevel(20);
         spawned.player().setSaturation(20.0f);
 
-        // Off the tab list. The legacy info-remove waits for viewers' skin
-        // load; the modern LISTED=false is immediate and replicating.
-        if (tabConcealer.usesLegacyPath()) {
-            scheduling.runLaterOn(spawned.player(), 40L,
-                    () -> tabConcealer.hide(spawned.player()), () -> {});
-        } else {
-            tabConcealer.hide(spawned.player());
+        // Off the tab list (configurable). The legacy info-remove waits for
+        // viewers' skin load; the modern LISTED=false is immediate.
+        if (config.snapshot().hideFromTab()) {
+            if (tabConcealer.usesLegacyPath()) {
+                scheduling.runLaterOn(spawned.player(), 40L,
+                        () -> tabConcealer.hide(spawned.player()), () -> {});
+            } else {
+                tabConcealer.hide(spawned.player());
+            }
         }
 
         if (request.targetName() != null) {

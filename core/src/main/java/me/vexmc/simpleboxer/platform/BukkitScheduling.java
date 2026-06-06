@@ -7,6 +7,7 @@ import me.vexmc.simpleboxer.common.scheduling.TaskHandle;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.entity.Entity;
+import org.bukkit.entity.Player;
 import org.bukkit.plugin.Plugin;
 import org.bukkit.scheduler.BukkitTask;
 import org.jetbrains.annotations.NotNull;
@@ -38,7 +39,7 @@ public final class BukkitScheduling implements Scheduling {
     @Override
     public void runOn(@NotNull Entity entity, @NotNull Runnable task, @NotNull Runnable retired) {
         Bukkit.getScheduler().runTask(plugin, () -> {
-            if (entity.isValid()) {
+            if (live(entity)) {
                 task.run();
             } else {
                 retired.run();
@@ -46,11 +47,22 @@ public final class BukkitScheduling implements Scheduling {
         });
     }
 
+    /**
+     * Players retire on QUIT, not on death — isValid() drops while dead,
+     * but a dead player respawns and its work must keep flowing.
+     */
+    private static boolean live(Entity entity) {
+        if (entity instanceof Player player) {
+            return player.isOnline();
+        }
+        return entity.isValid();
+    }
+
     @Override
     public void runLaterOn(@NotNull Entity entity, long delayTicks,
             @NotNull Runnable task, @NotNull Runnable retired) {
         Bukkit.getScheduler().runTaskLater(plugin, () -> {
-            if (entity.isValid()) {
+            if (live(entity)) {
                 task.run();
             } else {
                 retired.run();
@@ -77,7 +89,7 @@ public final class BukkitScheduling implements Scheduling {
             @NotNull Runnable retired) {
         BukkitHandle[] holder = new BukkitHandle[1];
         BukkitTask bukkitTask = Bukkit.getScheduler().runTaskTimer(plugin, () -> {
-            if (entity.isValid()) {
+            if (live(entity)) {
                 task.run();
                 return;
             }

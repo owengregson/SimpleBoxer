@@ -516,11 +516,17 @@ public final class NmsBridge {
     }
 
     private void setPosition(Object serverPlayer, Location location) throws ReflectiveOperationException {
+        setPosition(serverPlayer, location.getX(), location.getY(), location.getZ());
+    }
+
+    /** Direct server-side position write ({@code Entity.setPos}). */
+    public void setPosition(@NotNull Object serverPlayer, double x, double y, double z)
+            throws ReflectiveOperationException {
         Class<?> entityClass = nmsClass("net.minecraft.world.entity.Entity");
         Method setPos = methodAssignableCached(entityClass, "setPos",
                 double.class, double.class, double.class);
         if (setPos != null) {
-            setPos.invoke(serverPlayer, location.getX(), location.getY(), location.getZ());
+            setPos.invoke(serverPlayer, x, y, z);
         }
     }
 

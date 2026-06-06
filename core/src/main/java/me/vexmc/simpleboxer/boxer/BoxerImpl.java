@@ -41,7 +41,7 @@ final class BoxerImpl implements Boxer {
     private final NmsBridge bridge;
     private final PacketIO packetIO;
     private final Logger logger;
-    private final NmsBridge.SpawnedPlayer spawned;
+    private NmsBridge.SpawnedPlayer spawned;
     private final BukkitCollisionView collisionView;
     private final ClientPhysics physics;
     private final AimSpring aim;
@@ -143,6 +143,7 @@ final class BoxerImpl implements Boxer {
         if (removed.get()) {
             return;
         }
+        refreshHandleAfterRespawn();
         long now = System.nanoTime();
         long oneWay = TimeUnit.MILLISECONDS.toNanos(settings.pingMs()) / 2;
 
@@ -179,8 +180,48 @@ final class BoxerImpl implements Boxer {
         }
 
         // 5. Tick the ServerPlayer (timers, effects, food — the server
-        //    half of being a player).
+        //    half of being a player). On older versions doTick ALSO runs
+        //    the entity's own travel, displacing the boxer by its server
+        //    motion fields — real players never show this because their
+        //    clients stream absolute positions every tick that overwrite
+        //    it. The boxer's server position must follow ONLY its move
+        //    packets and teleports, so any doTick displacement is undone.
+        Location preTick = spawned.player().getLocation();
         bridge.tick(spawned.serverPlayer());
+        Location postTick = spawned.player().getLocation();
+        if (postTick.getX() != preTick.getX() || postTick.getY() != preTick.getY()
+                || postTick.getZ() != preTick.getZ()) {
+            try {
+                bridge.setPosition(spawned.serverPlayer(),
+                        preTick.getX(), preTick.getY(), preTick.getZ());
+            } catch (ReflectiveOperationException failure) {
+                logger.warning("[" + name + "] position restore failed: " + failure);
+            }
+        }
+    }
+
+    /**
+     * Respawn REPLACES the ServerPlayer entity (and its entity id) while the
+     * Bukkit player and the connection survive — stale handles would tick a
+     * detached corpse and filter velocity packets by a dead id. The Connection
+     * (and our capture handler on its channel) carries over untouched.
+     */
+    private void refreshHandleAfterRespawn() {
+        try {
+            Object liveHandle = bridge.handleOf(spawned.player());
+            if (liveHandle != spawned.serverPlayer()) {
+                Object listener = bridge.readConnectionField(liveHandle);
+                spawned = new NmsBridge.SpawnedPlayer(liveHandle,
+                        listener != null ? listener : spawned.gameListener(),
+                        spawned.player(), spawned.player().getEntityId());
+                // The respawn relocated us server-side; re-seat the emulator
+                // (the teleport packet also arrives through the normal path).
+                Location location = spawned.player().getLocation();
+                physics.teleport(location.getX(), location.getY(), location.getZ());
+            }
+        } catch (Throwable unresolved) {
+            // Keep the old handle; the next tick retries.
+        }
     }
 
     private void snapshotTarget(long now) {

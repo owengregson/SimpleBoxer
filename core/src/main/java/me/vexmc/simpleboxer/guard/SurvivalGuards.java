@@ -69,20 +69,22 @@ public final class SurvivalGuards implements Listener {
         event.setDroppedExp(0);
 
         Location deathSpot = player.getLocation().clone();
-        scheduling.runOn(player, () -> {
+        // runGlobal, not runOn: a DEAD entity fails runOn's validity gate
+        // and the respawn would silently never dispatch.
+        scheduling.runGlobal(() -> {
             if (!player.isOnline()) {
                 return;
             }
             // spigot().respawn() is the API form of the client's respawn
             // button — the same PlayerRespawnEvent path a real player takes.
             player.spigot().respawn();
-            scheduling.runOn(player, () -> {
+            scheduling.runGlobal(() -> {
                 if (player.isOnline()) {
                     player.teleport(deathSpot);
                     player.setHealth(maxHealth(player));
                 }
-            }, () -> {});
-        }, () -> {});
+            });
+        });
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)

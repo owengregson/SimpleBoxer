@@ -6,6 +6,10 @@ import me.vexmc.simpleboxer.SimpleBoxerPlugin;
 import me.vexmc.simpleboxer.common.scheduling.Scheduling;
 import me.vexmc.simpleboxer.common.scheduling.TaskHandle;
 import me.vexmc.simpleboxer.tester.suite.BootSuite;
+import me.vexmc.simpleboxer.tester.suite.CombatSuite;
+import me.vexmc.simpleboxer.tester.suite.CommandSuite;
+import me.vexmc.simpleboxer.tester.suite.GuardSuite;
+import me.vexmc.simpleboxer.tester.suite.LatencySuite;
 import me.vexmc.simpleboxer.tester.suite.SpawnSuite;
 import org.bukkit.plugin.java.JavaPlugin;
 
@@ -45,12 +49,23 @@ public final class SBTesterPlugin extends JavaPlugin {
             return;
         }
 
+        boolean mental = getServer().getPluginManager().getPlugin("Mental") != null;
+        boolean ocm = getServer().getPluginManager().getPlugin("OldCombatMechanics") != null;
+        if (mental || ocm) {
+            getLogger().info("Combat stack detected (Mental=" + mental + ", OCM=" + ocm
+                    + ") — the suites run against its shaping.");
+        }
+
         Scheduling scheduling = simpleBoxer.scheduling();
         TaskHandle[] starter = new TaskHandle[1];
         starter[0] = scheduling.repeatGlobal(SETTLE_TICKS, 72_000L, () -> {
             starter[0].cancel();
             List<TestCase> suite = new ArrayList<>(BootSuite.tests(simpleBoxer));
             suite.addAll(SpawnSuite.tests(simpleBoxer));
+            suite.addAll(CombatSuite.tests(this));
+            suite.addAll(GuardSuite.tests());
+            suite.addAll(LatencySuite.tests());
+            suite.addAll(CommandSuite.tests(simpleBoxer));
             new TestHarness(this, scheduling).run(suite);
         });
     }

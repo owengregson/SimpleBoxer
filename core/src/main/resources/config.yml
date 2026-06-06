@@ -1,0 +1,82 @@
+# ──────────────────────────────────────────────────────────────────────────
+#  SimpleBoxer — virtual sparring players
+#
+#  Boxers are REAL players to the server: real player list entries, real
+#  inventories, real movement packets, real knockback. Everything below
+#  tunes the brain driving them. Every key inherits sensible defaults when
+#  omitted; malformed values warn in the console and keep the inherited
+#  value — a typo can never break a spawn.
+# ──────────────────────────────────────────────────────────────────────────
+
+# Keep boxers out of the tab list (they stay tab-completable in commands —
+# completion is server-side). On 1.19.2 and older this uses the classic
+# info-remove technique: players who join AFTER a boxer spawned see its
+# default skin, the known tradeoff of that era's protocol.
+hide-from-tab: true
+
+# Applied to every spawn that names no preset, and the base every preset
+# overlays. The shipped values describe an unhandicapped sparring partner:
+# no artificial ping, crisp-but-human aim, spam-click cadence, straight
+# rush, no w-tap.
+defaults:
+  # Simulated round-trip time, milliseconds (0–2000). Half delays what the
+  # boxer perceives (the world, its own knockback packets), half delays its
+  # actions (movement, clicks) — the symmetric split of a real connection.
+  ping-ms: 0
+  # Clicks per second (0–50; 0 = never attacks). At 20 TPS, 20+ CPS
+  # saturates at one click per tick like any real client.
+  cps: 8.0
+  # Per-click interval wobble, 0–0.9 (fraction of the interval). The
+  # long-run rate stays at cps.
+  click-jitter: 0.3
+  # The aim spring: how the crosshair chases the target.
+  aim:
+    # locked (aimbot snap) / sharp (crisp PvP) / smooth (comfortable
+    # tracking) / sloppy (clearly human-limited).
+    preset: sharp
+    # Granular overrides on top of the preset, all optional:
+    # stiffness: 0.55      # error fraction converted to velocity per tick (0-1)
+    # damping: 0.30        # velocity surviving each tick (0-0.999; higher = springier = overshoots)
+    # max-velocity: 60.0   # degrees per tick cap
+  # Attack range in blocks (0.5–6). 3.0 is the vanilla survival default;
+  # the server still applies its own validation on top.
+  reach: 3.0
+  # A click only becomes an attack when the crosshair is within this many
+  # degrees of the target bearing — out-of-cone clicks swing at air.
+  aim-tolerance-degrees: 10.0
+  # W-tap: release forward (dropping sprint) after a landed hit, then
+  # re-press — re-arming sprint knockback exactly like a human w-tapper.
+  w-tap:
+    enabled: false
+    # Ticks after the landed hit before the release begins (0–20).
+    delay-ticks: 1
+    # Ticks the forward key stays released (1–20).
+    release-ticks: 2
+  movement:
+    # rush (straight at the target) / strafe-circle (orbit in the pocket) /
+    # strafe-weave (left-right on approach) / stand (feet planted).
+    style: rush
+    # Blocks of range discipline — the boxer holds this distance instead of
+    # body-blocking through its target.
+    stop-distance: 2.5
+    # Sprint when closing distance.
+    sprint: true
+  # Take every hit fully (knockback, immunity, hit events) but restore the
+  # health afterwards. Damage is NEVER cancelled or reduced — that would
+  # change combat semantics. A single hit beyond max health still kills;
+  # the boxer respawns in place immediately.
+  invincible: true
+  # Pin hunger full: sprint stays legal, no exhaustion noise.
+  feed-hunger: true
+
+# Named presets selectable at spawn (/boxer spawn <name> <preset>) and via
+# /boxer set <name> preset <preset>. Each is a sparse overlay over
+# `defaults`. The built-in ladder is always available — dummy, easy,
+# medium, hard, expert, aimbot — and an entry here with the same name
+# OVERRIDES the built-in.
+presets:
+  # laggy-spammer:
+  #   ping-ms: 180
+  #   cps: 14
+  #   aim:
+  #     preset: smooth

@@ -3,10 +3,13 @@ package me.vexmc.simpleboxer;
 import me.vexmc.simpleboxer.api.BoxerService;
 import me.vexmc.simpleboxer.boxer.BoxerManager;
 import me.vexmc.simpleboxer.boxer.CombatFeedbackListener;
+import me.vexmc.simpleboxer.command.BoxerCommands;
 import me.vexmc.simpleboxer.common.scheduling.Scheduling;
+import me.vexmc.simpleboxer.config.ConfigStore;
 import me.vexmc.simpleboxer.guard.SurvivalGuards;
 import me.vexmc.simpleboxer.identity.BoxerJoinListener;
 import me.vexmc.simpleboxer.platform.BukkitScheduling;
+import org.bukkit.command.PluginCommand;
 import org.bukkit.plugin.ServicePriority;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.jetbrains.annotations.NotNull;
@@ -23,13 +26,15 @@ import org.jetbrains.annotations.NotNull;
 public final class SimpleBoxerPlugin extends JavaPlugin {
 
     private Scheduling scheduling;
+    private ConfigStore configStore;
     private BoxerManager boxerManager;
 
     @Override
     public void onEnable() {
         this.scheduling = new BukkitScheduling(this);
+        this.configStore = new ConfigStore(this);
         try {
-            this.boxerManager = new BoxerManager(this, scheduling);
+            this.boxerManager = new BoxerManager(this, scheduling, configStore);
         } catch (ReflectiveOperationException incompatible) {
             getLogger().severe("This server version is not supported: " + incompatible);
             getServer().getPluginManager().disablePlugin(this);
@@ -37,6 +42,12 @@ public final class SimpleBoxerPlugin extends JavaPlugin {
         }
         getServer().getServicesManager().register(
                 BoxerService.class, boxerManager, this, ServicePriority.Normal);
+        PluginCommand boxerCommand = getCommand("boxer");
+        if (boxerCommand != null) {
+            BoxerCommands executor = new BoxerCommands(boxerManager, configStore);
+            boxerCommand.setExecutor(executor);
+            boxerCommand.setTabCompleter(executor);
+        }
         getServer().getPluginManager().registerEvents(
                 new SurvivalGuards(boxerManager, scheduling), this);
         getServer().getPluginManager().registerEvents(
