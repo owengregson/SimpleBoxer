@@ -27,7 +27,14 @@ public final class LatencySuite {
                     Location center = context.sync(() -> Arenas.arena(world, 160, 100));
                     Boxer boxer = Arenas.spawn("Wired", center, DifficultyPresets.DUMMY);
                     try {
-                        context.awaitTicks(10);
+                        context.awaitUntil(() -> {
+                            try {
+                                return boxer.player().isOnGround();
+                            } catch (Throwable gone) {
+                                return false;
+                            }
+                        }, 60, "the boxer to settle");
+                        context.awaitTicks(3);
                         double startZ = context.sync(() -> boxer.player().getLocation().getZ());
                         context.syncRun(() -> boxer.player()
                                 .setVelocity(new Vector(0.0, 0.4607, 0.9)));
@@ -47,26 +54,51 @@ public final class LatencySuite {
                     Boxer boxer = Arenas.spawn("Laggy", center,
                             DifficultyPresets.DUMMY.withPingMs(400));
                     try {
-                        context.awaitTicks(15);
+                        context.awaitUntil(() -> {
+                            try {
+                                return boxer.player().isOnGround();
+                            } catch (Throwable gone) {
+                                return false;
+                            }
+                        }, 60, "the laggy boxer to settle");
+                        // A 400ms boxer's teleport confirm takes 8+ ticks
+                        // each way; vanilla re-teleports unconfirmed clients
+                        // on a 20-tick cycle. Probe AFTER the join turbulence
+                        // — a real 400ms player rubber-bands through the
+                        // same window.
+                        context.awaitTicks(30);
                         double startZ = context.sync(() -> boxer.player().getLocation().getZ());
+                        long stamped = System.nanoTime();
                         context.syncRun(() -> boxer.player()
                                 .setVelocity(new Vector(0.0, 0.4607, 0.9)));
+                        context.note("post-set velocity reads "
+                                + context.sync(() -> boxer.player().getVelocity()));
                         // One-way = 200 ms = 4 ticks: the perception line is
-                        // still holding the packet two ticks in...
+                        // still holding the packet two ticks in. The lines
+                        // are WALL-clock (network transit is wall time), so
+                        // the parked assertion only binds when the two game
+                        // ticks really took under the one-way wall window —
+                        // a matrix stall's catch-up burst burns ticks faster
+                        // than wall and would assert against matured state.
                         context.awaitTicks(2);
                         double early = context.sync(
                                 () -> boxer.player().getLocation().getZ()) - startZ;
-                        context.expect(Math.abs(early) < 0.2,
-                                "still parked inside the one-way window (" + early + ")");
-                        // ...and the flight arrives after it matures (plus the
-                        // action line shipping the movement back).
+                        if (System.nanoTime() - stamped < 150_000_000L) {
+                            context.expect(Math.abs(early) < 0.2,
+                                    "still parked inside the one-way window (" + early + ")");
+                        } else {
+                            context.note("stall burst skipped the parked-window assertion");
+                        }
+                        // ...and the flight arrives after the wall-time
+                        // maturity (plus the action line shipping movement
+                        // back) — 100 ticks bounds a several-second stall.
                         context.awaitUntil(() -> {
                             try {
                                 return boxer.player().getLocation().getZ() - startZ > 1.0;
                             } catch (Throwable gone) {
                                 return false;
                             }
-                        }, 40, "the delayed knock to fly");
+                        }, 100, "the delayed knock to fly");
                     } finally {
                         context.syncRun(boxer::remove);
                     }

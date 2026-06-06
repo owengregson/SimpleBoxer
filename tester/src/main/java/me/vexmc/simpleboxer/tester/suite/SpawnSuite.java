@@ -59,7 +59,16 @@ public final class SpawnSuite {
                     Boxer boxer = Arenas.spawn("KnockProof", center,
                                     DifficultyPresets.DUMMY);
                     try {
-                        context.awaitTicks(10); // settle onto the floor
+                        // Condition-based settle: a fixed wait races slow
+                        // spawn-falls under end-of-matrix load.
+                        context.awaitUntil(() -> {
+                            try {
+                                return boxer.player().isOnGround();
+                            } catch (Throwable gone) {
+                                return false;
+                            }
+                        }, 60, "the boxer to settle onto the floor");
+                        context.awaitTicks(3);
                         double startZ = context.sync(() -> boxer.player().getLocation().getZ());
                         // The era sprint stamp along +Z, applied the way every
                         // plugin applies knockback — setVelocity sends a real

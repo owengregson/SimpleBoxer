@@ -35,6 +35,9 @@ import org.jetbrains.annotations.Nullable;
  */
 final class BoxerImpl implements Boxer {
 
+    /** -Dsimpleboxer.debug=true: per-event brain tracing (matrix forensics). */
+    private static final boolean DEBUG = Boolean.getBoolean("simpleboxer.debug");
+
     private final String name;
     private final UUID uuid;
     private final BoxerManager manager;
@@ -219,6 +222,9 @@ final class BoxerImpl implements Boxer {
         try {
             Object liveHandle = bridge.handleOf(spawned.player());
             if (liveHandle != spawned.serverPlayer()) {
+                if (DEBUG) {
+                    logger.info("[debug " + name + "] handle swap detected");
+                }
                 Object listener = bridge.readConnectionField(liveHandle);
                 spawned = new NmsBridge.SpawnedPlayer(liveHandle,
                         listener != null ? listener : spawned.gameListener(),
@@ -249,6 +255,10 @@ final class BoxerImpl implements Boxer {
     private void route(@NotNull Inbound inbound, long now) {
         if (inbound instanceof Inbound.Velocity velocity) {
             if (velocity.entityId() == spawned.entityId()) {
+                if (DEBUG) {
+                    logger.info("[debug " + name + "] velocity applied (" + velocity.vx()
+                            + "," + velocity.vy() + "," + velocity.vz() + ") emuZ=" + physics.z());
+                }
                 physics.applyVelocity(velocity.vx(), velocity.vy(), velocity.vz());
             }
             return;
@@ -280,6 +290,10 @@ final class BoxerImpl implements Boxer {
             float yaw = sync.relativeYaw() ? aim.yaw() + sync.yaw() : sync.yaw();
             float pitch = sync.relativePitch() ? aim.pitch() + sync.pitch() : sync.pitch();
             aim.snapTo(yaw, pitch);
+            if (DEBUG) {
+                logger.info("[debug " + name + "] teleport sync id=" + sync.teleportId()
+                        + " -> (" + x + "," + y + "," + z + ")");
+            }
             actions.offer(new Action.AcceptTeleport(sync.teleportId()), now);
         }
     }
@@ -430,6 +444,10 @@ final class BoxerImpl implements Boxer {
         boolean rotated = Math.abs(yaw - lastSentYaw) > 1.0E-3
                 || Math.abs(pitch - lastSentPitch) > 1.0E-3;
         if (moved || rotated || ++idleMoveTicks >= 20) {
+            if (DEBUG && moved) {
+                logger.info("[debug " + name + "] move queued z=" + z
+                        + " server=" + spawned.player().getLocation().getZ());
+            }
             idleMoveTicks = 0;
             actions.offer(new Action.Move(x, y, z, yaw, pitch,
                     physics.onGround(), physics.horizontalCollision(), moved, rotated), now);
@@ -456,6 +474,9 @@ final class BoxerImpl implements Boxer {
                         packetIO.sprint(spawned.serverPlayer(), spawned.entityId(), sprint.start()),
                         spawned.gameListener());
             } else if (action instanceof Action.AcceptTeleport accept) {
+                if (DEBUG) {
+                    logger.info("[debug " + name + "] accept dispatched id=" + accept.id());
+                }
                 packetIO.dispatch(packetIO.acceptTeleport(accept.id()), spawned.gameListener());
             } else if (action instanceof Action.Attack attack) {
                 if (attack.victim().isOnline()) {

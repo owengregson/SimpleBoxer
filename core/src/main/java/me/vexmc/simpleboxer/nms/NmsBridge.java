@@ -207,8 +207,14 @@ public final class NmsBridge {
         try {
             if (!hurtMarkedResolved) {
                 hurtMarkedResolved = true;
-                Field field = Reflect.field(serverPlayer.getClass(),
-                        remapField(serverPlayer.getClass(), "hurtMarked"));
+                // hurtMarked is declared on Entity; spigot-mapped remapping
+                // resolves a field only against its DECLARING class, so walk
+                // the hierarchy and remap at every level.
+                Field field = null;
+                for (Class<?> owner = serverPlayer.getClass();
+                        owner != null && field == null; owner = owner.getSuperclass()) {
+                    field = Reflect.field(owner, remapField(owner, "hurtMarked"));
+                }
                 if (field == null) {
                     field = Reflect.field(serverPlayer.getClass(), "hurtMarked");
                 }
