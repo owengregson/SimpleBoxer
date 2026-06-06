@@ -123,15 +123,20 @@ public final class NmsBridge {
     public void remove(@NotNull SpawnedPlayer spawned, @NotNull String quitMessage) {
         Player player = spawned.player();
         try {
-            Bukkit.getPluginManager().callEvent(new PlayerQuitEvent(player, quitMessage));
-        } catch (Throwable ignored) {
-            // Some versions require a quit reason component; the kick below
-            // still cleans up.
-        }
-        try {
             player.kickPlayer(quitMessage);
         } catch (Throwable ignored) {
             // Stubbed connection — fall through to direct list removal.
+        }
+        // The kick fires PlayerQuitEvent on every healthy path; fire it
+        // manually ONLY if the player somehow survived (firing first would
+        // double-deliver and other plugins' quit handlers see a not-online
+        // player on the second pass).
+        if (player.isOnline()) {
+            try {
+                Bukkit.getPluginManager().callEvent(new PlayerQuitEvent(player, quitMessage));
+            } catch (Throwable ignored) {
+                // Some versions require a quit reason component.
+            }
         }
         try {
             Object playerList = playerList(minecraftServer());
@@ -233,9 +238,40 @@ public final class NmsBridge {
                 player.setVelocity(event.getVelocity());
             }
             field.setBoolean(serverPlayer, false);
-            return velocityFromEntityConstructor.newInstance(serverPlayer);
+            Object packet = velocityFromEntityConstructor.newInstance(serverPlayer);
+            // Vanilla broadcastAndSend ships the same packet to the victim's
+            // VIEWERS too — without this, spectators of a boxer would see a
+            // once-decayed motion sync instead of the pristine stamp.
+            for (Player viewer : Bukkit.getOnlinePlayers()) {
+                if (!viewer.getUniqueId().equals(player.getUniqueId())) {
+                    sendPacket(viewer, packet);
+                }
+            }
+            return packet;
         } catch (Throwable unsupported) {
             return null;
+        }
+    }
+
+    /** Reflective {@code connection.send(packet)} to a live player. */
+    public void sendPacket(@NotNull Player viewer, @NotNull Object packet) {
+        try {
+            Object handle = handleOf(viewer);
+            Object connection = readConnectionField(handle);
+            if (connection == null) {
+                return;
+            }
+            for (Method method : connection.getClass().getMethods()) {
+                if (method.getParameterCount() == 1
+                        && method.getReturnType() == void.class
+                        && method.getParameterTypes()[0].isInstance(packet)
+                        && method.getParameterTypes()[0].getSimpleName().equals("Packet")) {
+                    method.invoke(connection, packet);
+                    return;
+                }
+            }
+        } catch (Throwable unsupported) {
+            // A missed spectator packet is cosmetic.
         }
     }
 
@@ -346,20 +382,58 @@ public final class NmsBridge {
     private Object createGameProfile(UUID uuid, String name, @Nullable SkinTextures skin)
             throws ReflectiveOperationException {
         Class<?> profileClass = Class.forName("com.mojang.authlib.GameProfile");
-        Object profile = profileClass.getConstructor(UUID.class, String.class).newInstance(uuid, name);
-        if (skin != null) {
-            Class<?> propertyClass = Class.forName("com.mojang.authlib.properties.Property");
-            Object property = propertyClass.getConstructor(String.class, String.class, String.class)
-                    .newInstance("textures", skin.value(), skin.signature());
-            Object properties = Reflect.method(profileClass, "getProperties").invoke(profile);
-            Method put = Reflect.methodAssignable(properties.getClass(), "put",
-                    String.class, propertyClass);
+        if (skin == null) {
+            return profileClass.getConstructor(UUID.class, String.class).newInstance(uuid, name);
+        }
+        Class<?> propertyClass = Class.forName("com.mojang.authlib.properties.Property");
+        Object property = propertyClass.getConstructor(String.class, String.class, String.class)
+                .newInstance("textures", skin.value(), skin.signature());
+        Class<?> mapClass = Class.forName("com.mojang.authlib.properties.PropertyMap");
+        Object propertyMap;
+        try {
+            propertyMap = mapClass.getConstructor().newInstance();
+            Method put = Reflect.methodAssignable(mapClass, "put", String.class, propertyClass);
             if (put == null) {
                 throw new NoSuchMethodException("PropertyMap.put not found");
             }
-            put.invoke(properties, "textures", property);
+            put.invoke(propertyMap, "textures", property);
+        } catch (NoSuchMethodException authlib7) {
+            // authlib 7 dropped the no-arg constructor: wrap a live guava
+            // multimap instead (guava ships with every server).
+            Class<?> multimapClass = Class.forName("com.google.common.collect.LinkedHashMultimap");
+            Object multimap = multimapClass.getMethod("create").invoke(null);
+            Method put = Reflect.methodAssignable(multimap.getClass(), "put",
+                    String.class, propertyClass);
+            if (put == null) {
+                throw new NoSuchMethodException("Multimap.put not found");
+            }
+            put.invoke(multimap, "textures", property);
+            Class<?> guavaMultimap = Class.forName("com.google.common.collect.Multimap");
+            propertyMap = mapClass.getConstructor(guavaMultimap).newInstance(multimap);
         }
-        return profile;
+        // authlib 7 made GameProfile a record whose property map is frozen —
+        // the textures must ride the 3-arg constructor. Older authlib lacks
+        // it; there the 2-arg profile's map is live and mutated directly.
+        try {
+            Constructor<?> withProperties =
+                    profileClass.getConstructor(UUID.class, String.class, mapClass);
+            return withProperties.newInstance(uuid, name, propertyMap);
+        } catch (NoSuchMethodException legacyAuthlib) {
+            Object profile = profileClass.getConstructor(UUID.class, String.class)
+                    .newInstance(uuid, name);
+            Method getProperties = Reflect.method(profileClass, "getProperties");
+            if (getProperties == null) {
+                throw new NoSuchMethodException("GameProfile.getProperties not found");
+            }
+            Object properties = getProperties.invoke(profile);
+            Method legacyPut = Reflect.methodAssignable(properties.getClass(), "put",
+                    String.class, propertyClass);
+            if (legacyPut == null) {
+                throw new NoSuchMethodException("PropertyMap.put not found");
+            }
+            legacyPut.invoke(properties, "textures", property);
+            return profile;
+        }
     }
 
     private Object createServerPlayer(Object minecraftServer, Object worldServer, Object gameProfile)

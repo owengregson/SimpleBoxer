@@ -87,6 +87,13 @@ public final class BoxerManager implements BoxerService {
             try {
                 future.complete(spawnNow(request, skin));
             } catch (Throwable failure) {
+                // The console logger always hears about it — a command
+                // sender (rcon especially) may be gone by completion time.
+                Throwable root = failure;
+                while (root.getCause() != null) {
+                    root = root.getCause();
+                }
+                plugin.getLogger().warning("Spawn of '" + request.name() + "' failed: " + root);
                 future.completeExceptionally(failure);
             }
         };
