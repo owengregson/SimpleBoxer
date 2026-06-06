@@ -25,6 +25,10 @@ public interface Scheduling {
      */
     void runOn(@NotNull Entity entity, @NotNull Runnable task, @NotNull Runnable retired);
 
+    /** {@link #runOn} after a tick delay. */
+    void runLaterOn(@NotNull Entity entity, long delayTicks,
+            @NotNull Runnable task, @NotNull Runnable retired);
+
     void runAsync(@NotNull Runnable task);
 
     @NotNull TaskHandle repeatGlobal(long initialTicks, long periodTicks, @NotNull Runnable task);

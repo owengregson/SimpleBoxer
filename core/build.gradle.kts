@@ -115,6 +115,9 @@ fun registerIntegrationServer(
         group = "simpleboxer integration"
         description = "Boots Paper $label with SimpleBoxer + tester and runs the suite."
         dependsOn(tasks.shadowJar, testerShadowJar)
+        // A server boot is never up-to-date — the suite result IS the output,
+        // and it lives outside Gradle's tracked outputs by design.
+        outputs.upToDateWhen { false }
         runDirectory.set(runDir)
         minecraftVersion(version)
         // disable.watchdog matters on slow CI runners: a >60s tick stall

@@ -47,6 +47,18 @@ public final class BukkitScheduling implements Scheduling {
     }
 
     @Override
+    public void runLaterOn(@NotNull Entity entity, long delayTicks,
+            @NotNull Runnable task, @NotNull Runnable retired) {
+        Bukkit.getScheduler().runTaskLater(plugin, () -> {
+            if (entity.isValid()) {
+                task.run();
+            } else {
+                retired.run();
+            }
+        }, delayTicks);
+    }
+
+    @Override
     public void runAsync(@NotNull Runnable task) {
         Bukkit.getScheduler().runTaskAsynchronously(plugin, task);
     }

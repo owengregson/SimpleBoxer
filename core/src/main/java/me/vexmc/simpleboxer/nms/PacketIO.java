@@ -1,0 +1,549 @@
+package me.vexmc.simpleboxer.nms;
+
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
+import java.util.ArrayList;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import org.bukkit.entity.Entity;
+import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
+
+/**
+ * Builds the serverbound packets a real client would send and dispatches
+ * them through the boxer's own game listener — the same handlers, the same
+ * validation, the same Bukkit events a socket delivers. Decodes the few
+ * clientbound packets the brain reacts to (velocity, teleports, explosions),
+ * unwrapping 1.19.4+ bundles.
+ *
+ * <p>Every shape is probed once and memoized. Spigot-mapped member names
+ * only exist through 1.20.4 — anything newer (PositionMoveRotation, the
+ * Vec3 motion field, the compacted PlayerCommand action enum) runs on a
+ * Mojang-mapped server by construction, so modern shapes use Mojang names
+ * directly and legacy shapes route through the remapper.</p>
+ */
+public final class PacketIO {
+
+    private final NmsBridge bridge;
+
+    public PacketIO(@NotNull NmsBridge bridge) throws ReflectiveOperationException {
+        this.bridge = bridge;
+        resolve();
+    }
+
+    /* ------------------------------------------------------------------ */
+    /*  Resolution                                                         */
+    /* ------------------------------------------------------------------ */
+
+    private Constructor<?> posRotConstructor;
+    private boolean posRotHasCollisionFlag;
+    private Constructor<?> statusOnlyConstructor;
+    private boolean statusOnlyHasCollisionFlag;
+    private Constructor<?> acceptTeleportConstructor;
+    private Constructor<?> playerCommandConstructor;
+    private boolean playerCommandHasData;
+    private boolean playerCommandTakesEntity;
+    private Object startSprinting;
+    private Object stopSprinting;
+    private @Nullable Method attackFactory;
+    private @Nullable Constructor<?> attackConstructor;
+    private Constructor<?> swingConstructor;
+    private Object mainHand;
+    private Constructor<?> clientCommandConstructor;
+    private Object performRespawn;
+
+    private Class<?> motionPacketClass;
+    private Field motionId;
+    private Field @Nullable [] motionInts;
+    private @Nullable Field motionVec;
+    private Class<?> positionPacketClass;
+    private Class<?> explodePacketClass;
+    private @Nullable Class<?> bundlePacketClass;
+    private @Nullable Method bundleSubPackets;
+
+    private Field vecX;
+    private Field vecY;
+    private Field vecZ;
+
+    private final Map<Class<?>, Method> handleMethods = new ConcurrentHashMap<>();
+
+    private void resolve() throws ReflectiveOperationException {
+        Class<?> moveClass = bridge.nmsClass("net.minecraft.network.protocol.game.ServerboundMovePlayerPacket");
+        for (Class<?> nested : moveClass.getDeclaredClasses()) {
+            for (Constructor<?> constructor : nested.getConstructors()) {
+                Class<?>[] p = constructor.getParameterTypes();
+                if (matches(p, double.class, double.class, double.class,
+                        float.class, float.class, boolean.class)) {
+                    posRotConstructor = constructor;
+                    posRotHasCollisionFlag = false;
+                } else if (matches(p, double.class, double.class, double.class,
+                        float.class, float.class, boolean.class, boolean.class)) {
+                    posRotConstructor = constructor;
+                    posRotHasCollisionFlag = true;
+                } else if (matches(p, boolean.class)) {
+                    statusOnlyConstructor = constructor;
+                    statusOnlyHasCollisionFlag = false;
+                } else if (matches(p, boolean.class, boolean.class)) {
+                    statusOnlyConstructor = constructor;
+                    statusOnlyHasCollisionFlag = true;
+                }
+            }
+        }
+        if (posRotConstructor == null) {
+            throw new NoSuchMethodException("MovePlayerPacket.PosRot constructor not found");
+        }
+
+        Class<?> acceptClass = bridge.nmsClass(
+                "net.minecraft.network.protocol.game.ServerboundAcceptTeleportationPacket");
+        acceptTeleportConstructor = acceptClass.getConstructor(int.class);
+
+        Class<?> commandClass = bridge.nmsClass(
+                "net.minecraft.network.protocol.game.ServerboundPlayerCommandPacket");
+        Class<?> entityBaseClass = bridge.nmsClass("net.minecraft.world.entity.Entity");
+        Class<?> actionClass = nestedEnum(commandClass, "Action");
+        startSprinting = sprintAction(actionClass, true);
+        stopSprinting = sprintAction(actionClass, false);
+        // Two parameter eras: 1.17 takes the Entity itself, newer versions
+        // take the raw entity id; either may carry a trailing data int.
+        for (Constructor<?> constructor : commandClass.getConstructors()) {
+            Class<?>[] p = constructor.getParameterTypes();
+            boolean idShape = p.length >= 2 && p[0] == int.class && p[1] == actionClass;
+            boolean entityShape = p.length >= 2
+                    && p[0].isAssignableFrom(entityBaseClass) && p[1] == actionClass;
+            if (!idShape && !entityShape) {
+                continue;
+            }
+            if (p.length == 2 || (p.length == 3 && p[2] == int.class)) {
+                playerCommandConstructor = constructor;
+                playerCommandHasData = p.length == 3;
+                playerCommandTakesEntity = entityShape;
+                if (p.length == 2) {
+                    break; // prefer the dataless shape when both exist
+                }
+            }
+        }
+        if (playerCommandConstructor == null) {
+            throw new NoSuchMethodException("PlayerCommandPacket constructor not found");
+        }
+
+        // Attack changed shape in 26.x: the InteractPacket action union (with
+        // its createAttackPacket factory) split into a dedicated record,
+        // ServerboundAttackPacket(int entityId).
+        Class<?> interactClass = bridge.nmsClass(
+                "net.minecraft.network.protocol.game.ServerboundInteractPacket");
+        Class<?> entityClass = bridge.nmsClass("net.minecraft.world.entity.Entity");
+        String attackName = bridge.remapMethod(interactClass, "createAttackPacket",
+                entityClass, boolean.class);
+        attackFactory = Reflect.methodAssignable(interactClass, attackName, entityClass, boolean.class);
+        if (attackFactory == null) {
+            attackFactory = Reflect.methodAssignable(interactClass, "createAttackPacket",
+                    entityClass, boolean.class);
+        }
+        if (attackFactory == null) {
+            Class<?> attackClass = bridge.nmsClass(
+                    "net.minecraft.network.protocol.game.ServerboundAttackPacket");
+            attackConstructor = attackClass.getConstructor(int.class);
+        }
+
+        Class<?> handClass = bridge.nmsClass("net.minecraft.world.InteractionHand");
+        mainHand = handClass.getEnumConstants()[0]; // MAIN_HAND is ordinal 0 on every version
+        Class<?> swingClass = bridge.nmsClass("net.minecraft.network.protocol.game.ServerboundSwingPacket");
+        swingConstructor = swingClass.getConstructor(handClass);
+
+        Class<?> clientCommandClass = bridge.nmsClass(
+                "net.minecraft.network.protocol.game.ServerboundClientCommandPacket");
+        Class<?> respawnActionClass = nestedEnum(clientCommandClass, "Action");
+        performRespawn = enumByNameContains(respawnActionClass, "RESPAWN", 0);
+        clientCommandConstructor = clientCommandClass.getConstructor(respawnActionClass);
+
+        // Clientbound shapes.
+        motionPacketClass = bridge.nmsClass(
+                "net.minecraft.network.protocol.game.ClientboundSetEntityMotionPacket");
+        Class<?> vec3Class = bridge.nmsClass("net.minecraft.world.phys.Vec3");
+        vecX = fieldByName(vec3Class, "x");
+        vecY = fieldByName(vec3Class, "y");
+        vecZ = fieldByName(vec3Class, "z");
+        List<Field> ints = new ArrayList<>();
+        for (Field field : motionPacketClass.getDeclaredFields()) {
+            if (Modifier.isStatic(field.getModifiers())) {
+                continue;
+            }
+            field.setAccessible(true);
+            if (field.getType() == int.class) {
+                ints.add(field);
+            } else if (field.getType() == vec3Class) {
+                motionVec = field;
+            }
+        }
+        if (motionVec != null && ints.size() == 1) {
+            motionId = ints.get(0);          // modern: int id + Vec3 movement
+        } else if (ints.size() == 4) {
+            motionId = ints.get(0);          // legacy: id, xa, ya, za (×8000)
+            motionInts = new Field[] {ints.get(1), ints.get(2), ints.get(3)};
+        } else {
+            throw new NoSuchFieldException("Unrecognized SetEntityMotionPacket layout");
+        }
+
+        positionPacketClass = bridge.nmsClass(
+                "net.minecraft.network.protocol.game.ClientboundPlayerPositionPacket");
+        explodePacketClass = bridge.nmsClass(
+                "net.minecraft.network.protocol.game.ClientboundExplodePacket");
+        try {
+            bundlePacketClass = bridge.nmsClass(
+                    "net.minecraft.network.protocol.game.ClientboundBundlePacket");
+            String subName = bridge.remapMethod(bundlePacketClass, "subPackets");
+            bundleSubPackets = Reflect.method(bundlePacketClass, subName);
+            if (bundleSubPackets == null) {
+                bundleSubPackets = Reflect.method(bundlePacketClass, "subPackets");
+            }
+        } catch (ClassNotFoundException pre1194) {
+            bundlePacketClass = null;
+        }
+    }
+
+    /**
+     * 1.21.6 compacted the action enum (the shift keys moved to player
+     * input), shifting every ordinal — match sprint constants by NAME first
+     * (Mojang-mapped on every version where the compaction exists), by
+     * remapped name for spigot-mapped servers, and only then by the
+     * pre-compaction ordinals 3/4.
+     */
+    private Object sprintAction(Class<?> actionClass, boolean start) {
+        String mojangName = start ? "START_SPRINTING" : "STOP_SPRINTING";
+        for (Object constant : actionClass.getEnumConstants()) {
+            if (((Enum<?>) constant).name().equals(mojangName)) {
+                return constant;
+            }
+        }
+        try {
+            String remapped = bridge.remapField(actionClass, mojangName);
+            for (Object constant : actionClass.getEnumConstants()) {
+                if (((Enum<?>) constant).name().equals(remapped)) {
+                    return constant;
+                }
+            }
+        } catch (Throwable unmapped) {
+            // fall through to ordinals
+        }
+        Object[] constants = actionClass.getEnumConstants();
+        return constants[Math.min(start ? 3 : 4, constants.length - 1)];
+    }
+
+    private static Object enumByNameContains(Class<?> enumClass, String fragment, int fallbackOrdinal) {
+        Object[] constants = enumClass.getEnumConstants();
+        for (Object constant : constants) {
+            if (((Enum<?>) constant).name().contains(fragment)) {
+                return constant;
+            }
+        }
+        return constants[Math.min(fallbackOrdinal, constants.length - 1)];
+    }
+
+    private static Class<?> nestedEnum(Class<?> owner, String simpleName) throws ClassNotFoundException {
+        for (Class<?> nested : owner.getDeclaredClasses()) {
+            if (nested.isEnum() && nested.getSimpleName().equals(simpleName)) {
+                return nested;
+            }
+        }
+        // Spigot-mapped nesting keeps the shape even when names shift; an
+        // enum nested in a packet with one enum member is unambiguous.
+        for (Class<?> nested : owner.getDeclaredClasses()) {
+            if (nested.isEnum()) {
+                return nested;
+            }
+        }
+        throw new ClassNotFoundException(simpleName + " enum in " + owner.getName());
+    }
+
+    private Field fieldByName(Class<?> owner, String mojangName) throws NoSuchFieldException {
+        Field field = Reflect.field(owner, bridge.remapField(owner, mojangName));
+        if (field == null) {
+            field = Reflect.field(owner, mojangName);
+        }
+        if (field == null) {
+            throw new NoSuchFieldException(mojangName + " on " + owner.getName());
+        }
+        return field;
+    }
+
+    private static boolean matches(Class<?>[] parameters, Class<?>... expected) {
+        if (parameters.length != expected.length) {
+            return false;
+        }
+        for (int i = 0; i < parameters.length; i++) {
+            if (parameters[i] != expected[i]) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /* ------------------------------------------------------------------ */
+    /*  Serverbound factories                                              */
+    /* ------------------------------------------------------------------ */
+
+    public @NotNull Object movePosRot(double x, double y, double z, float yaw, float pitch,
+            boolean onGround, boolean horizontalCollision) throws ReflectiveOperationException {
+        return posRotHasCollisionFlag
+                ? posRotConstructor.newInstance(x, y, z, yaw, pitch, onGround, horizontalCollision)
+                : posRotConstructor.newInstance(x, y, z, yaw, pitch, onGround);
+    }
+
+    public @Nullable Object moveStatusOnly(boolean onGround, boolean horizontalCollision)
+            throws ReflectiveOperationException {
+        if (statusOnlyConstructor == null) {
+            return null;
+        }
+        return statusOnlyHasCollisionFlag
+                ? statusOnlyConstructor.newInstance(onGround, horizontalCollision)
+                : statusOnlyConstructor.newInstance(onGround);
+    }
+
+    public @NotNull Object acceptTeleport(int teleportId) throws ReflectiveOperationException {
+        return acceptTeleportConstructor.newInstance(teleportId);
+    }
+
+    public @NotNull Object sprint(@NotNull Object serverPlayer, int entityId, boolean start)
+            throws ReflectiveOperationException {
+        Object action = start ? startSprinting : stopSprinting;
+        Object subject = playerCommandTakesEntity ? serverPlayer : entityId;
+        return playerCommandHasData
+                ? playerCommandConstructor.newInstance(subject, action, 0)
+                : playerCommandConstructor.newInstance(subject, action);
+    }
+
+    /** Attack packet against a live Bukkit entity (resolves its NMS handle). */
+    public @NotNull Object attack(@NotNull Entity target) throws ReflectiveOperationException {
+        if (attackFactory != null) {
+            Object handle = bridge.handleOf(target);
+            return attackFactory.invoke(null, handle, false);
+        }
+        return attackConstructor.newInstance(target.getEntityId());
+    }
+
+    public @NotNull Object swing() throws ReflectiveOperationException {
+        return swingConstructor.newInstance(mainHand);
+    }
+
+    public @NotNull Object respawn() throws ReflectiveOperationException {
+        return clientCommandConstructor.newInstance(performRespawn);
+    }
+
+    /* ------------------------------------------------------------------ */
+    /*  Dispatch                                                           */
+    /* ------------------------------------------------------------------ */
+
+    /**
+     * Hands the packet to the boxer's game listener exactly as the vanilla
+     * packet_handler does after decode — same handlers, same validation,
+     * same events. Must run on the thread owning the boxer (the handlers'
+     * ensureRunningOnSameThread executes inline there).
+     */
+    public void dispatch(@NotNull Object packet, @NotNull Object gameListener) throws ReflectiveOperationException {
+        Method handle = handleMethods.get(packet.getClass());
+        if (handle == null) {
+            for (Method method : packet.getClass().getMethods()) {
+                if (method.getParameterCount() == 1
+                        && method.getReturnType() == void.class
+                        && !Modifier.isStatic(method.getModifiers())
+                        && method.getParameterTypes()[0].isInterface()
+                        && method.getParameterTypes()[0].isInstance(gameListener)) {
+                    method.setAccessible(true);
+                    handleMethods.put(packet.getClass(), handle = method);
+                    break;
+                }
+            }
+            if (handle == null) {
+                throw new NoSuchMethodException("handle() not found on " + packet.getClass());
+            }
+        }
+        handle.invoke(packet, gameListener);
+    }
+
+    /* ------------------------------------------------------------------ */
+    /*  Clientbound recognition                                            */
+    /* ------------------------------------------------------------------ */
+
+    /** Decodes the packets the brain reacts to; unwraps 1.19.4+ bundles. */
+    public @NotNull List<Inbound> recognize(@NotNull Object packet) {
+        List<Inbound> decoded = new ArrayList<>(1);
+        collect(packet, decoded, 0);
+        return decoded;
+    }
+
+    private void collect(Object packet, List<Inbound> into, int depth) {
+        if (depth > 2) {
+            return;
+        }
+        try {
+            if (bundlePacketClass != null && bundlePacketClass.isInstance(packet)
+                    && bundleSubPackets != null) {
+                Object subPackets = bundleSubPackets.invoke(packet);
+                if (subPackets instanceof Iterable<?> iterable) {
+                    for (Object sub : iterable) {
+                        collect(sub, into, depth + 1);
+                    }
+                }
+                return;
+            }
+            if (motionPacketClass.isInstance(packet)) {
+                into.add(decodeVelocity(packet));
+            } else if (positionPacketClass.isInstance(packet)) {
+                Inbound.PositionSync sync = decodePosition(packet);
+                if (sync != null) {
+                    into.add(sync);
+                }
+            } else if (explodePacketClass.isInstance(packet)) {
+                Inbound.Explosion explosion = decodeExplosion(packet);
+                if (explosion != null) {
+                    into.add(explosion);
+                }
+            }
+        } catch (Throwable decodeFailure) {
+            // A packet the brain cannot decode is a packet it ignores — the
+            // server's authoritative resync (teleports) self-heals drift.
+        }
+    }
+
+    private Inbound.Velocity decodeVelocity(Object packet) throws ReflectiveOperationException {
+        int id = motionId.getInt(packet);
+        if (motionVec != null) {
+            Object vec = motionVec.get(packet);
+            return new Inbound.Velocity(id,
+                    vecX.getDouble(vec), vecY.getDouble(vec), vecZ.getDouble(vec));
+        }
+        return new Inbound.Velocity(id,
+                motionInts[0].getInt(packet) / 8000.0,
+                motionInts[1].getInt(packet) / 8000.0,
+                motionInts[2].getInt(packet) / 8000.0);
+    }
+
+    private @Nullable Inbound.PositionSync decodePosition(Object packet) throws ReflectiveOperationException {
+        Integer id = null;
+        Double x = null;
+        Double y = null;
+        Double z = null;
+        Float yaw = null;
+        Float pitch = null;
+        Set<?> relatives = null;
+        Object change = null;
+
+        for (Field field : packet.getClass().getDeclaredFields()) {
+            if (Modifier.isStatic(field.getModifiers())) {
+                continue;
+            }
+            field.setAccessible(true);
+            Class<?> type = field.getType();
+            if (type == double.class) {
+                double value = field.getDouble(packet);
+                if (x == null) {
+                    x = value;
+                } else if (y == null) {
+                    y = value;
+                } else if (z == null) {
+                    z = value;
+                }
+            } else if (type == float.class) {
+                float value = field.getFloat(packet);
+                if (yaw == null) {
+                    yaw = value;
+                } else if (pitch == null) {
+                    pitch = value;
+                }
+            } else if (type == int.class) {
+                id = field.getInt(packet);
+            } else if (Set.class.isAssignableFrom(type)) {
+                relatives = (Set<?>) field.get(packet);
+            } else if (type.getSimpleName().equals("PositionMoveRotation")) {
+                change = field.get(packet);
+            }
+        }
+
+        boolean[] flags = relativeFlags(relatives);
+        if (change != null) {
+            // 1.21.2+: PositionMoveRotation(position, deltaMovement, yRot, xRot)
+            // — modern-only, therefore Mojang-named at runtime.
+            Object position = change.getClass().getMethod("position").invoke(change);
+            Object delta = change.getClass().getMethod("deltaMovement").invoke(change);
+            float yRot = (float) change.getClass().getMethod("yRot").invoke(change);
+            float xRot = (float) change.getClass().getMethod("xRot").invoke(change);
+            Inbound.PositionSync.Motion motion = new Inbound.PositionSync.Motion(
+                    vecX.getDouble(delta), vecY.getDouble(delta), vecZ.getDouble(delta),
+                    flags[5], flags[6], flags[7]);
+            return new Inbound.PositionSync(id == null ? -1 : id,
+                    vecX.getDouble(position), vecY.getDouble(position), vecZ.getDouble(position),
+                    yRot, xRot, flags[0], flags[1], flags[2], flags[3], flags[4], motion);
+        }
+        if (x == null || y == null || z == null || yaw == null || pitch == null || id == null) {
+            return null;
+        }
+        return new Inbound.PositionSync(id, x, y, z, yaw, pitch,
+                flags[0], flags[1], flags[2], flags[3], flags[4], null);
+    }
+
+    /**
+     * Relative-teleport flags by ORDINAL — X, Y, Z, Y_ROT, X_ROT are 0–4 in
+     * every version's enum, the modern delta flags 5–7; constant names are
+     * obfuscated on spigot-mapped servers but ordinals never moved.
+     */
+    private static boolean[] relativeFlags(@Nullable Set<?> relatives) {
+        boolean[] flags = new boolean[9];
+        if (relatives != null) {
+            for (Object relative : relatives) {
+                if (relative instanceof Enum<?> constant && constant.ordinal() < flags.length) {
+                    flags[constant.ordinal()] = true;
+                }
+            }
+        }
+        return flags;
+    }
+
+    private @Nullable Inbound.Explosion decodeExplosion(Object packet) throws ReflectiveOperationException {
+        // Legacy (≤1.21.1): float knockback components behind getters.
+        Method getX = Reflect.method(packet.getClass(),
+                bridge.remapMethod(packet.getClass(), "getKnockbackX"));
+        if (getX == null) {
+            getX = Reflect.method(packet.getClass(), "getKnockbackX");
+        }
+        if (getX != null) {
+            Method getY = Reflect.method(packet.getClass(),
+                    bridge.remapMethod(packet.getClass(), "getKnockbackY"));
+            if (getY == null) {
+                getY = Reflect.method(packet.getClass(), "getKnockbackY");
+            }
+            Method getZ = Reflect.method(packet.getClass(),
+                    bridge.remapMethod(packet.getClass(), "getKnockbackZ"));
+            if (getZ == null) {
+                getZ = Reflect.method(packet.getClass(), "getKnockbackZ");
+            }
+            if (getY != null && getZ != null) {
+                return new Inbound.Explosion(
+                        ((Number) getX.invoke(packet)).doubleValue(),
+                        ((Number) getY.invoke(packet)).doubleValue(),
+                        ((Number) getZ.invoke(packet)).doubleValue());
+            }
+        }
+        // Modern (1.21.2+): Optional<Vec3> playerKnockback — Mojang-named.
+        for (Field field : packet.getClass().getDeclaredFields()) {
+            if (Modifier.isStatic(field.getModifiers()) || field.getType() != Optional.class) {
+                continue;
+            }
+            field.setAccessible(true);
+            Optional<?> knockback = (Optional<?>) field.get(packet);
+            if (knockback.isEmpty()) {
+                return null;
+            }
+            Object vec = knockback.get();
+            if (vecX.getDeclaringClass().isInstance(vec)) {
+                return new Inbound.Explosion(
+                        vecX.getDouble(vec), vecY.getDouble(vec), vecZ.getDouble(vec));
+            }
+        }
+        return null;
+    }
+}

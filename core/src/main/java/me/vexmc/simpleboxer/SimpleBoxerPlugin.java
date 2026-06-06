@@ -1,7 +1,13 @@
 package me.vexmc.simpleboxer;
 
+import me.vexmc.simpleboxer.api.BoxerService;
+import me.vexmc.simpleboxer.boxer.BoxerManager;
+import me.vexmc.simpleboxer.boxer.CombatFeedbackListener;
 import me.vexmc.simpleboxer.common.scheduling.Scheduling;
+import me.vexmc.simpleboxer.guard.SurvivalGuards;
+import me.vexmc.simpleboxer.identity.BoxerJoinListener;
 import me.vexmc.simpleboxer.platform.BukkitScheduling;
+import org.bukkit.plugin.ServicePriority;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.jetbrains.annotations.NotNull;
 
@@ -17,16 +23,35 @@ import org.jetbrains.annotations.NotNull;
 public final class SimpleBoxerPlugin extends JavaPlugin {
 
     private Scheduling scheduling;
+    private BoxerManager boxerManager;
 
     @Override
     public void onEnable() {
         this.scheduling = new BukkitScheduling(this);
+        try {
+            this.boxerManager = new BoxerManager(this, scheduling);
+        } catch (ReflectiveOperationException incompatible) {
+            getLogger().severe("This server version is not supported: " + incompatible);
+            getServer().getPluginManager().disablePlugin(this);
+            return;
+        }
+        getServer().getServicesManager().register(
+                BoxerService.class, boxerManager, this, ServicePriority.Normal);
+        getServer().getPluginManager().registerEvents(
+                new SurvivalGuards(boxerManager, scheduling), this);
+        getServer().getPluginManager().registerEvents(
+                new BoxerJoinListener(boxerManager, boxerManager.tabConcealer(), scheduling), this);
+        getServer().getPluginManager().registerEvents(
+                new CombatFeedbackListener(boxerManager), this);
         getLogger().info("SimpleBoxer " + getDescription().getVersion()
                 + " enabled (scheduling: " + scheduling.describe() + ").");
     }
 
     @Override
     public void onDisable() {
+        if (boxerManager != null) {
+            boxerManager.shutdown();
+        }
         getLogger().info("SimpleBoxer disabled.");
     }
 
@@ -35,5 +60,12 @@ public final class SimpleBoxerPlugin extends JavaPlugin {
             throw new IllegalStateException("SimpleBoxer is not enabled");
         }
         return scheduling;
+    }
+
+    public @NotNull BoxerService boxers() {
+        if (boxerManager == null) {
+            throw new IllegalStateException("SimpleBoxer is not enabled");
+        }
+        return boxerManager;
     }
 }
