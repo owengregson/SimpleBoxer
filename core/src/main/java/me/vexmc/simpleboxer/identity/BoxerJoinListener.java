@@ -32,11 +32,15 @@ public final class BoxerJoinListener implements Listener {
 
     @EventHandler
     public void onJoin(PlayerJoinEvent event) {
-        if (!tabConcealer.usesLegacyPath() || boxers.isBoxer(event.getPlayer().getUniqueId())) {
+        if (boxers.isBoxer(event.getPlayer().getUniqueId())) {
             return;
         }
+        // Listing is per-viewer on EVERY version — each joiner needs their
+        // own hide. Modern (unlistPlayer) flips immediately; the legacy
+        // info-remove waits out the viewer's skin load first.
         Player viewer = event.getPlayer();
-        scheduling.runLaterOn(viewer, SKIN_LOAD_DELAY_TICKS, () -> {
+        long delay = tabConcealer.usesLegacyPath() ? SKIN_LOAD_DELAY_TICKS : 1L;
+        scheduling.runLaterOn(viewer, delay, () -> {
             for (Boxer boxer : boxers.all()) {
                 tabConcealer.hideFrom(boxer.player(), viewer);
             }

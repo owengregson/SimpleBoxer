@@ -69,12 +69,15 @@ public final class CombatSuite {
                         context.syncRun(() -> fighter.setTarget(dummy.player()));
                         context.awaitTicks(120); // six seconds of swinging
                         int hits = counter.hits.get();
-                        // Vanilla immunity admits ~2 hits/s; combat plugins
-                        // (OCM-style hit delay) admit ~1/s. Anything below
-                        // says the attack path is broken; anything way above
-                        // says immunity is being bypassed.
-                        context.expect(hits >= 5, "at least 5 hits in 6s (got " + hits + ")");
-                        context.expect(hits <= 16, "immunity gates the spam (got " + hits + ")");
+                        // The honest property is hits ≪ clicks (~96 at 16
+                        // CPS): the gate exists. The admitted rate varies
+                        // legitimately — vanilla immunity admits ~2/s but
+                        // the 1.9+ attack meter's varying spam damage rides
+                        // the difference rule up to ~3/s, while OCM-style
+                        // hit delay (the coexistence legs) plus approach
+                        // time gates down to ~4 hits per window.
+                        context.expect(hits >= 3, "hits land at all (got " + hits + ")");
+                        context.expect(hits <= 24, "immunity gates the spam (got " + hits + ")");
                         context.note("hits in 120 ticks: " + hits);
                     } finally {
                         context.syncRun(() -> HandlerList.unregisterAll(counter));

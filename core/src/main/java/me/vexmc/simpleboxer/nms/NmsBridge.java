@@ -24,7 +24,9 @@ import org.bukkit.Location;
 import org.bukkit.entity.Player;
 import org.bukkit.event.player.AsyncPlayerPreLoginEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
+import org.bukkit.event.player.PlayerVelocityEvent;
 import org.bukkit.plugin.java.JavaPlugin;
+import org.bukkit.util.Vector;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import xyz.jpenilla.reflectionremapper.ReflectionRemapper;
@@ -177,6 +179,63 @@ public final class NmsBridge {
         } catch (Throwable ignored) {
             // Ticking is best-effort, like the tester's: a single missed
             // tick self-heals next tick.
+        }
+    }
+
+    private volatile Field hurtMarkedField;
+    private volatile boolean hurtMarkedResolved;
+    private volatile Constructor<?> velocityFromEntityConstructor;
+
+    /**
+     * Vanilla ships a player's own knockback as a SetEntityMotion packet
+     * when processing {@code hurtMarked} — but WHERE moved across the range
+     * (doTick on most versions, the entity tracker on 1.21.x), and a
+     * boxer's doTick ALSO drags its server motion fields, so the flag must
+     * be consumed BEFORE the tick or the packet ships one decay stale.
+     * This replicates the vanilla processing exactly, every version, ahead
+     * of the tick: fire PlayerVelocityEvent (combat pipelines listen to
+     * it), honor cancellation (flag stays set, like the tracker), apply a
+     * listener-modified velocity, clear the flag, build the same packet
+     * vanilla builds. Vanilla's own processing then finds the flag false.
+     */
+    public @Nullable Object drainHurtMarked(@NotNull Object serverPlayer, @NotNull Player player) {
+        try {
+            if (!hurtMarkedResolved) {
+                hurtMarkedResolved = true;
+                Field field = Reflect.field(serverPlayer.getClass(),
+                        remapField(serverPlayer.getClass(), "hurtMarked"));
+                if (field == null) {
+                    field = Reflect.field(serverPlayer.getClass(), "hurtMarked");
+                }
+                hurtMarkedField = field;
+                Class<?> packetClass = nmsClass(
+                        "net.minecraft.network.protocol.game.ClientboundSetEntityMotionPacket");
+                for (Constructor<?> constructor : packetClass.getConstructors()) {
+                    Class<?>[] parameters = constructor.getParameterTypes();
+                    if (parameters.length == 1 && parameters[0].isInstance(serverPlayer)) {
+                        velocityFromEntityConstructor = constructor;
+                        break;
+                    }
+                }
+            }
+            Field field = hurtMarkedField;
+            if (field == null || velocityFromEntityConstructor == null
+                    || !field.getBoolean(serverPlayer)) {
+                return null;
+            }
+            Vector velocity = player.getVelocity();
+            PlayerVelocityEvent event = new PlayerVelocityEvent(player, velocity.clone());
+            Bukkit.getPluginManager().callEvent(event);
+            if (event.isCancelled()) {
+                return null; // flag stays set — the tracker's exact behavior
+            }
+            if (!velocity.equals(event.getVelocity())) {
+                player.setVelocity(event.getVelocity());
+            }
+            field.setBoolean(serverPlayer, false);
+            return velocityFromEntityConstructor.newInstance(serverPlayer);
+        } catch (Throwable unsupported) {
+            return null;
         }
     }
 

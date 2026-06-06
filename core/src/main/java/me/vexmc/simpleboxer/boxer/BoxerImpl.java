@@ -179,7 +179,15 @@ final class BoxerImpl implements Boxer {
             dispatch(action);
         }
 
-        // 5. Tick the ServerPlayer (timers, effects, food — the server
+        // 5. Ship the boxer's own pending knockback BEFORE the tick:
+        //    doTick's travel drags the server motion fields, and a packet
+        //    synthesized after it would carry a once-decayed stamp.
+        Object selfVelocity = bridge.drainHurtMarked(spawned.serverPlayer(), spawned.player());
+        if (selfVelocity != null) {
+            onOutboundPacket(new CapturedPacket(System.nanoTime(), selfVelocity));
+        }
+
+        // 6. Tick the ServerPlayer (timers, effects, food — the server
         //    half of being a player). On older versions doTick ALSO runs
         //    the entity's own travel, displacing the boxer by its server
         //    motion fields — real players never show this because their
@@ -198,6 +206,7 @@ final class BoxerImpl implements Boxer {
                 logger.warning("[" + name + "] position restore failed: " + failure);
             }
         }
+
     }
 
     /**

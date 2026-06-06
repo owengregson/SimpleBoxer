@@ -15,56 +15,60 @@ import org.jetbrains.annotations.Nullable;
  * command tab-completion still offers them (the completion list is built
  * from the player list, not the client's tab UI).
  *
- * <p>1.19.3+ has the clean primitive: player-info LISTED=false via Paper's
- * {@code Player#setListed} (the skin keeps rendering because the info entry
- * survives). Older servers get the classic NPC technique — broadcast an
- * info-REMOVE after the skin has had time to load; players who join later
- * see the default skin, the known pre-1.19.3 tradeoff.</p>
+ * <p>Listing is per-VIEWER on every version. 1.19.3+ has the clean
+ * primitive: {@code viewer.unlistPlayer(boxer)} flips the info entry's
+ * LISTED flag for that viewer — the entry (and the skin) survives. Older
+ * servers get the classic NPC technique, an info-REMOVE packet per viewer
+ * sent after the skin has had time to load; players who join later see the
+ * default skin, the known tradeoff of that protocol era. Both paths need
+ * re-hiding for every new joiner.</p>
  */
 public final class TabConcealer {
 
     private final NmsBridge bridge;
     private final Logger logger;
-    private final @Nullable Method setListed;
+    private final @Nullable Method unlistPlayer;
 
     public TabConcealer(@NotNull NmsBridge bridge, @NotNull Logger logger) {
         this.bridge = bridge;
         this.logger = logger;
         Method found = null;
         try {
-            found = Player.class.getMethod("setListed", boolean.class);
+            found = Player.class.getMethod("unlistPlayer", Player.class);
         } catch (NoSuchMethodException pre1193) {
-            // Legacy path below.
+            // Legacy packet path below.
         }
-        this.setListed = found;
+        this.unlistPlayer = found;
     }
 
     /** Hide from every current viewer. Main thread. */
     public void hide(@NotNull Player boxer) {
-        if (setListed != null) {
-            try {
-                setListed.invoke(boxer, false);
-                return;
-            } catch (ReflectiveOperationException failure) {
-                logger.warning("setListed failed, falling back to info-remove: " + failure);
+        for (Player viewer : Bukkit.getOnlinePlayers()) {
+            if (!viewer.getUniqueId().equals(boxer.getUniqueId())) {
+                hideFrom(boxer, viewer);
             }
         }
-        broadcastInfoRemove(boxer, null);
     }
 
-    /** Re-hide for one late joiner (legacy path keeps boxers off their tab). */
+    /** Hide from one viewer (current or late joiner). Main thread. */
     public void hideFrom(@NotNull Player boxer, @NotNull Player viewer) {
-        if (setListed != null) {
-            return; // LISTED=false already replicates to new viewers
+        if (unlistPlayer != null) {
+            try {
+                unlistPlayer.invoke(viewer, boxer);
+                return;
+            } catch (ReflectiveOperationException failure) {
+                logger.warning("unlistPlayer failed, falling back to info-remove: " + failure);
+            }
         }
-        broadcastInfoRemove(boxer, viewer);
+        sendInfoRemove(boxer, viewer);
     }
 
+    /** Legacy viewers need the skin loaded before the entry disappears. */
     public boolean usesLegacyPath() {
-        return setListed == null;
+        return unlistPlayer == null;
     }
 
-    private void broadcastInfoRemove(Player boxer, @Nullable Player onlyViewer) {
+    private void sendInfoRemove(Player boxer, Player viewer) {
         try {
             Object boxerHandle = bridge.handleOf(boxer);
             Class<?> packetClass = bridge.nmsClass(
@@ -98,15 +102,7 @@ public final class TabConcealer {
             if (packet == null) {
                 throw new NoSuchMethodException("No (Action, ServerPlayer[]) constructor");
             }
-            if (onlyViewer != null) {
-                sendTo(onlyViewer, packet);
-            } else {
-                for (Player viewer : Bukkit.getOnlinePlayers()) {
-                    if (!viewer.getUniqueId().equals(boxer.getUniqueId())) {
-                        sendTo(viewer, packet);
-                    }
-                }
-            }
+            sendTo(viewer, packet);
         } catch (Throwable failure) {
             logger.warning("Tab concealment failed (boxer stays listed): " + failure);
         }
