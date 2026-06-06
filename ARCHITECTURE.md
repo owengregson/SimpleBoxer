@@ -44,6 +44,21 @@ serves that constraint:
   via `FoodLevelChangeEvent` so sprint stays legal and no exhaustion noise
   leaks in.
 
+### The self-velocity contract (load-bearing)
+
+A player's own knockback packet is shipped by the ENTITY TRACKER when it
+processes `hurtMarked` — and a solo boxer has no tracker viewers, so
+vanilla never ships it at all. The brain therefore drains the flag itself
+BEFORE the ServerPlayer tick (after it, the tick's travel has already
+dragged the server motion fields and the packet would go out one decay
+stale — real players' fields never decay), replicating the tracker's
+contract exactly: PlayerVelocityEvent fires, cancellation leaves the flag
+set, a listener-modified velocity applies, the packet is built by the same
+vanilla constructor, and viewers receive the same pristine broadcast.
+Field resolution walks the class hierarchy remapping at each declaring
+level — `hurtMarked` lives on Entity, and spigot-mapped remapping resolves
+only against declaring classes.
+
 ### Two model corrections the suites forced (load-bearing)
 
 - **The server must never self-integrate a boxer's motion.** On older
