@@ -1,17 +1,14 @@
 package me.vexmc.simpleboxer.tester.suite;
 
 import java.util.List;
-import java.util.concurrent.TimeUnit;
 import me.vexmc.simpleboxer.SimpleBoxerPlugin;
 import me.vexmc.simpleboxer.api.Boxer;
-import me.vexmc.simpleboxer.api.BoxerSpawnRequest;
 import me.vexmc.simpleboxer.common.settings.BoxerSettings;
 import me.vexmc.simpleboxer.common.settings.DifficultyPresets;
 import me.vexmc.simpleboxer.tester.TestCase;
 import me.vexmc.simpleboxer.tester.TestContext;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
-import org.bukkit.Material;
 import org.bukkit.World;
 import org.bukkit.util.Vector;
 import org.jetbrains.annotations.NotNull;
@@ -26,37 +23,12 @@ public final class SpawnSuite {
 
     private SpawnSuite() {}
 
-    /** A flat stone pad far from spawn chaos; returns its center. */
-    private static Location arena(@NotNull World world, int baseX, int baseZ) {
-        int y = 80;
-        for (int x = baseX - 10; x <= baseX + 10; x++) {
-            for (int z = baseZ - 10; z <= baseZ + 18; z++) {
-                world.getBlockAt(x, y, z).setType(Material.STONE);
-                for (int clear = 1; clear <= 4; clear++) {
-                    world.getBlockAt(x, y + clear, z).setType(Material.AIR);
-                }
-            }
-        }
-        return new Location(world, baseX + 0.5, y + 1.0, baseZ + 0.5);
-    }
-
-    /**
-     * Driver-thread spawn: the future completes on the main thread, so this
-     * must never be called from inside {@code context.sync}.
-     */
-    private static Boxer spawnAndAwait(SimpleBoxerPlugin plugin,
-            String name, Location location, BoxerSettings settings) throws Exception {
-        return plugin.boxers()
-                .spawn(new BoxerSpawnRequest(name, location, settings, null, null))
-                .get(10, TimeUnit.SECONDS);
-    }
-
     public static @NotNull List<TestCase> tests(@NotNull SimpleBoxerPlugin plugin) {
         return List.of(
                 new TestCase("spawn: boxer is a live, named, targetable player", context -> {
                     World world = Bukkit.getWorlds().get(0);
-                    Location center = context.sync(() -> arena(world, 40, 40));
-                    Boxer boxer = spawnAndAwait(plugin(), "SpawnProof", center,
+                    Location center = context.sync(() -> Arenas.arena(world, 40, 40));
+                    Boxer boxer = Arenas.spawn("SpawnProof", center,
                                     DifficultyPresets.DUMMY);
                     try {
                         context.awaitTicks(5);
@@ -83,8 +55,8 @@ public final class SpawnSuite {
 
                 new TestCase("spawn: velocity packet flies the boxer (the architecture proof)", context -> {
                     World world = Bukkit.getWorlds().get(0);
-                    Location center = context.sync(() -> arena(world, 70, 40));
-                    Boxer boxer = spawnAndAwait(plugin(), "KnockProof", center,
+                    Location center = context.sync(() -> Arenas.arena(world, 70, 40));
+                    Boxer boxer = Arenas.spawn("KnockProof", center,
                                     DifficultyPresets.DUMMY);
                     try {
                         context.awaitTicks(10); // settle onto the floor
@@ -119,11 +91,11 @@ public final class SpawnSuite {
 
                 new TestCase("spawn: boxer follows and reaches its target", context -> {
                     World world = Bukkit.getWorlds().get(0);
-                    Location center = context.sync(() -> arena(world, 100, 40));
+                    Location center = context.sync(() -> Arenas.arena(world, 100, 40));
                     // The walker chases a dummy boxer 8 blocks north.
-                    Boxer post = spawnAndAwait(plugin(), "GoalPost", center.clone().add(0, 0, 8),
+                    Boxer post = Arenas.spawn("GoalPost", center.clone().add(0, 0, 8),
                                     DifficultyPresets.DUMMY);
-                    Boxer walker = spawnAndAwait(plugin(), "Walker", center,
+                    Boxer walker = Arenas.spawn("Walker", center,
                                     BoxerSettings.DEFAULTS);
                     try {
                         context.awaitTicks(5);
@@ -147,10 +119,10 @@ public final class SpawnSuite {
 
                 new TestCase("spawn: pause freezes the brain, resume revives it", context -> {
                     World world = Bukkit.getWorlds().get(0);
-                    Location center = context.sync(() -> arena(world, 130, 40));
-                    Boxer post = spawnAndAwait(plugin(), "PausePost", center.clone().add(0, 0, 8),
+                    Location center = context.sync(() -> Arenas.arena(world, 130, 40));
+                    Boxer post = Arenas.spawn("PausePost", center.clone().add(0, 0, 8),
                                     DifficultyPresets.DUMMY);
-                    Boxer pacer = spawnAndAwait(plugin(), "Pacer", center,
+                    Boxer pacer = Arenas.spawn("Pacer", center,
                                     BoxerSettings.DEFAULTS);
                     try {
                         context.awaitTicks(5);
@@ -180,8 +152,8 @@ public final class SpawnSuite {
 
                 new TestCase("spawn: removal cleans the player list", context -> {
                     World world = Bukkit.getWorlds().get(0);
-                    Location center = context.sync(() -> arena(world, 40, 70));
-                    Boxer boxer = spawnAndAwait(plugin(), "Ephemeral", center,
+                    Location center = context.sync(() -> Arenas.arena(world, 40, 70));
+                    Boxer boxer = Arenas.spawn("Ephemeral", center,
                                     DifficultyPresets.DUMMY);
                     context.awaitTicks(3);
                     context.syncRun(boxer::remove);

@@ -44,6 +44,23 @@ serves that constraint:
   via `FoodLevelChangeEvent` so sprint stays legal and no exhaustion noise
   leaks in.
 
+### Two model corrections the suites forced (load-bearing)
+
+- **The server must never self-integrate a boxer's motion.** On older
+  versions `ServerPlayer.doTick` runs the entity's own travel, moving it by
+  its server motion fields; real players never show this because their
+  clients stream absolute positions every tick that overwrite it. The brain
+  restores the server position after `doTick` — a boxer's entity follows
+  ONLY its move packets and teleports. (Found by the 400 ms latency test:
+  an idle boxer "flew" 0.9+0.49+0.45 blocks of pure server travel while its
+  delayed move packets were still parked.)
+- **Players retire on quit, not on death.** `isValid()` drops while dead,
+  which retired the brain task and removed the boxer before the respawn
+  intercept could run. Scheduling liveness is player-aware (`isOnline`),
+  and after a respawn the brain refreshes its NMS handle — respawn REPLACES
+  the ServerPlayer entity and entity id while the Bukkit player and the
+  Connection (with our capture handler) survive.
+
 ### Honest boundary
 
 In-process boxers have no socket, so their packets do not traverse the netty
