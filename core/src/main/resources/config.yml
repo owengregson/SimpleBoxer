@@ -61,7 +61,12 @@ defaults:
     # entity pushing resolves the body contact, exactly like a real
     # W-holding rusher. Easing off in the pocket drops sprint (vanilla
     # needs forward impulse >= 0.8) and kills the momentum that survives
-    # combos. Raise it (e.g. 2.5) for deliberate range-discipline trades.
+    # combos. Raise it (e.g. 2.5) for deliberate range-discipline trades —
+    # knowing what that means: every ring re-entry re-presses W and
+    # re-arms sprint, so a ringed boxer lands sprint-fresh (w-tap-grade)
+    # knockback on every return punch EVEN WITH w-tap disabled, while its
+    # in-ring punches land plain. Range discipline IS w-tapping; for
+    # symmetric hold-W trade sparring keep this 0.
     stop-distance: 0.0
     # Hold sprint whenever the forward key is down. Boxers also obey the
     # server's live movement-speed attribute, so Speed/Slowness potions

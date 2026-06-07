@@ -31,11 +31,19 @@ serves that constraint:
   fields would move wrongly. Packet integration is the only faithful model.
 - **Movement leaves the real way**: the brain emits genuine
   `ServerboundMovePlayerPacket.PosRot` (and sprint `PlayerCommand`, attack
-  `Interact`, `Swing`) objects dispatched through the boxer's own
+  `Interact`, `Swing`, the 1.21.2+ `PlayerInput` keyboard state on change)
+  objects dispatched through the boxer's own
   `ServerGamePacketListenerImpl` on the owning thread — the same handlers,
   validation, ground-state bookkeeping, and Bukkit events
-  (`PlayerMoveEvent`, `PlayerToggleSprintEvent`) a socket delivers for real
-  clients.
+  (`PlayerMoveEvent`, `PlayerToggleSprintEvent`, `PlayerInputEvent`) a
+  socket delivers for real clients.
+- **The client-loaded handshake is answered** (1.21.4+): the server arms a
+  60-tick gate at every game-listener construction and re-arms it on every
+  respawn; until `ServerboundPlayerLoadedPacket` arrives (or the gate times
+  out) it silently drops sprint commands, interactions and movement. A real
+  client answers when its level renders; the boxer answers at spawn and
+  again after every respawn — without the answer, a freshly respawned boxer
+  spends three seconds punching plain and walking unsprinted.
 - **Survival semantics stay vanilla**: damage events are never cancelled and
   damage amounts never altered (invulnerability would change the
   difference-rule and immunity-window behavior combat plugins implement);
@@ -142,7 +150,15 @@ world snapshot ──► PerceptionLine (delay = ping/2) ──► Behavior (int
   a real client. The default movement therefore never releases forward —
   releasing in the pocket drops sprint (vanilla needs forward impulse
   ≥ 0.8) and the momentum that survives combos. `stop-distance` rings, and
-  the analog-free ±1 strafe keys, are explicit opt-ins on top.
+  the analog-free ±1 strafe keys, are explicit opt-ins on top — and a ring
+  is a w-tap machine by construction: every re-entry re-presses W, which
+  re-arms sprint (and any sprint-freshness ledger watching the toggles), so
+  a ringed boxer lands sprint-fresh knockback on each return punch even
+  with `w-tap: false`, while its in-ring punches land plain. That is
+  player-identical (range discipline IS w-tapping) but it is NOT a
+  symmetric hold-W trading partner; keep the ring at 0 for trade sparring.
+  Measured on the lab (ring 2.5 vs 0): mixed 0.4/0.9 stamps at pocket
+  cadence vs uniform 0.9 with the 2-tick toggle-client re-arm rhythm.
 - **The sprint-attack proc** (load-bearing under OCM): vanilla
   `Player.attack` clears the ATTACKER's sprint flag and multiplies its own
   motion ×0.6 horizontally on every successful full-meter sprint hit —
