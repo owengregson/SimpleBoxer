@@ -36,10 +36,13 @@ public final class MovementSuite {
                             center.clone().add(-6, 0, 16), DifficultyPresets.DUMMY);
                     Boxer speedyPost = Arenas.spawn("SpeedyPost",
                             center.clone().add(6, 0, 16), DifficultyPresets.DUMMY);
+                    // cps 0: this is a footrace — a punching racer would
+                    // era-knock its finish post away on arrival under the
+                    // combat stack and the arrival await would never hold.
                     Boxer plain = Arenas.spawn("PlainRacer",
-                            center.clone().add(-6, 0, 0), BoxerSettings.DEFAULTS);
+                            center.clone().add(-6, 0, 0), BoxerSettings.DEFAULTS.withCps(0.0));
                     Boxer speedy = Arenas.spawn("SpeedyRacer",
-                            center.clone().add(6, 0, 0), BoxerSettings.DEFAULTS);
+                            center.clone().add(6, 0, 0), BoxerSettings.DEFAULTS.withCps(0.0));
                     try {
                         context.awaitTicks(5);
                         context.syncRun(() -> {
@@ -77,7 +80,12 @@ public final class MovementSuite {
                     Location center = context.sync(() -> Arenas.arena(world, 250, 100));
                     Boxer bag = Arenas.spawn("PocketBag",
                             center.clone().add(0, 0, 6), DifficultyPresets.DUMMY);
-                    Boxer presser = Arenas.spawn("Presser", center, BoxerSettings.DEFAULTS);
+                    // cps 0: pure pursuit. No landed hits means no vanilla
+                    // sprint-attack clears and no knockback moving the bag
+                    // — this case isolates the MOVEMENT contract (the old
+                    // stop ring released W at 2.5 and parked sprint false).
+                    Boxer presser = Arenas.spawn("Presser", center,
+                            BoxerSettings.DEFAULTS.withCps(0.0));
                     try {
                         context.awaitTicks(5);
                         context.syncRun(() -> presser.setTarget(bag.player()));
@@ -89,11 +97,9 @@ public final class MovementSuite {
                                 return false;
                             }
                         }, 100, "presser to press into the pocket");
-                        // 30 consecutive in-pocket ticks with the sprint
-                        // flag held. The server flag is fed ONLY by the
-                        // boxer's own PlayerCommand packets, so a single
-                        // forward release (the old stop-ring bug) — or any
-                        // toggle flapping — shows here immediately.
+                        // 30 consecutive in-pocket ticks with the flag held
+                        // — fed ONLY by the boxer's own PlayerCommands, so
+                        // a single forward release shows immediately.
                         for (int tick = 0; tick < 30; tick++) {
                             context.expect(context.sync(() -> presser.player().isSprinting()),
                                     "sprint held in the pocket (tick " + tick + ")");
@@ -105,6 +111,54 @@ public final class MovementSuite {
                                 "still pressed on the target (" + distance + ")");
                     } finally {
                         context.syncRun(presser::remove);
+                        context.syncRun(bag::remove);
+                    }
+                }),
+
+                new TestCase("movement: sprint re-arms through landed hits", context -> {
+                    World world = Bukkit.getWorlds().get(0);
+                    Location center = context.sync(() -> Arenas.arena(world, 280, 100));
+                    Boxer bag = Arenas.spawn("RearmBag",
+                            center.clone().add(0, 0, 6), DifficultyPresets.DUMMY);
+                    Boxer fighter = Arenas.spawn("Rearmer", center, BoxerSettings.DEFAULTS);
+                    try {
+                        context.awaitTicks(5);
+                        context.syncRun(() -> fighter.setTarget(bag.player()));
+                        context.awaitUntil(() -> {
+                            try {
+                                return fighter.player().getLocation()
+                                        .distance(bag.player().getLocation()) < 3.0;
+                            } catch (Throwable gone) {
+                                return false;
+                            }
+                        }, 100, "fighter to reach combat range");
+                        // Vanilla clears the ATTACKER's sprint flag on each
+                        // full-meter sprint hit — under OCM's restored 1.8
+                        // hit speed that is EVERY landed punch (and each
+                        // knock sends the bag flying, so the fight roams).
+                        // A toggle-sprint client re-arms within a tick or
+                        // two: across sustained combat the flag may flicker
+                        // at hit cadence but must dominate the window and
+                        // never stick false — the stale-cache bug parked it
+                        // false from the first punch onward.
+                        int sprinting = 0;
+                        int falseRun = 0;
+                        int worstFalseRun = 0;
+                        for (int tick = 0; tick < 40; tick++) {
+                            if (context.sync(() -> fighter.player().isSprinting())) {
+                                sprinting++;
+                                falseRun = 0;
+                            } else {
+                                worstFalseRun = Math.max(worstFalseRun, ++falseRun);
+                            }
+                            context.awaitTicks(1);
+                        }
+                        context.expect(sprinting >= 24,
+                                "sprint dominates the fight (" + sprinting + "/40 sprinting)");
+                        context.expect(worstFalseRun <= 6,
+                                "re-arm is prompt (worst gap " + worstFalseRun + " ticks)");
+                    } finally {
+                        context.syncRun(fighter::remove);
                         context.syncRun(bag::remove);
                     }
                 }));

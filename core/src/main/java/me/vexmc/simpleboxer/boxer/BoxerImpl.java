@@ -104,6 +104,8 @@ final class BoxerImpl implements Boxer {
     }
 
     private boolean serverSprinting;
+    /** Sprint PlayerCommands queued on the action line but not yet shipped. */
+    private int sprintActionsInFlight;
 
     BoxerImpl(
             @NotNull String name,
@@ -472,18 +474,55 @@ final class BoxerImpl implements Boxer {
 
     /** A hit this boxer threw landed (server confirmation, owning thread). */
     void onHitLanded() {
+        // Vanilla's sprint-attack proc, read exactly where attack() reads
+        // it: the damage event fires INSIDE hurt(), so the sprint flag and
+        // the attack meter still show their pre-clear values here. On a
+        // proc the attacker's own motion multiplies ×0.6 horizontally and
+        // the server clears its sprint flag (syncSprint's reconcile
+        // re-arms it next tick, the toggle-sprint client rhythm). Under
+        // OCM's restored 1.8 hit speed every spam click is full-meter, so
+        // this fires per landed hit — exactly as it did for era players.
+        // (The slow lands one brain tick after a zero-ping client would
+        // apply it — the click decision predates this tick's travel.)
+        if (serverSprinting && attackMeterFull()) {
+            physics.multiplyHorizontalVelocity(0.6);
+        }
         BoxerSettings.WTap wtap = settings.wtap();
         if (wtap.enabled() && wtapReleaseLeft == 0 && wtapCountdown < 0) {
             wtapCountdown = wtap.delayTicks();
         }
     }
 
-    /** Sprint state changes ship as the real PlayerCommand packets. */
+    /** attack()'s meter gate: getAttackStrengthScale(0.5) > 0.9. */
+    private boolean attackMeterFull() {
+        try {
+            return spawned.player().getAttackCooldown() > 0.9f;
+        } catch (Throwable unsupported) {
+            // No meter API → treat as the legacy always-full meter.
+            return true;
+        }
+    }
+
+    /**
+     * Sprint state changes ship as the real PlayerCommand packets. The
+     * cache reconciles against server truth first: vanilla clears the
+     * ATTACKER's sprint flag on every full-meter sprint hit (and a respawn
+     * resets it), and a real toggle-sprint client re-arms from its own
+     * prediction with a fresh START_SPRINTING — a stale cache would leave
+     * the boxer permanently unsprinting after its first punch on restored
+     * 1.8 hit speed. The in-flight guard keeps a high-ping boxer from
+     * re-sending while its previous command is still in transit.
+     */
     private void syncSprint(boolean sprinting) {
+        if (sprintActionsInFlight == 0 && serverSprinting
+                && !spawned.player().isSprinting()) {
+            serverSprinting = false;
+        }
         if (serverSprinting == sprinting) {
             return;
         }
         serverSprinting = sprinting;
+        sprintActionsInFlight++;
         actions.offer(new Action.Sprint(sprinting), System.nanoTime());
     }
 
@@ -525,6 +564,7 @@ final class BoxerImpl implements Boxer {
                     packetIO.dispatch(packet, spawned.gameListener());
                 }
             } else if (action instanceof Action.Sprint sprint) {
+                sprintActionsInFlight--;
                 packetIO.dispatch(
                         packetIO.sprint(spawned.serverPlayer(), spawned.entityId(), sprint.start()),
                         spawned.gameListener());

@@ -143,6 +143,19 @@ world snapshot ──► PerceptionLine (delay = ping/2) ──► Behavior (int
   releasing in the pocket drops sprint (vanilla needs forward impulse
   ≥ 0.8) and the momentum that survives combos. `stop-distance` rings, and
   the analog-free ±1 strafe keys, are explicit opt-ins on top.
+- **The sprint-attack proc** (load-bearing under OCM): vanilla
+  `Player.attack` clears the ATTACKER's sprint flag and multiplies its own
+  motion ×0.6 horizontally on every successful full-meter sprint hit —
+  with restored 1.8 hit speed that is every landed punch. The brain applies
+  the self-slow when the damage event confirms the hit (the event fires
+  inside `hurt()`, so the flag and meter still read their pre-clear
+  values), and `syncSprint` reconciles its cache against the server flag
+  each tick, re-sending START_SPRINTING exactly like a toggle-sprint
+  client's auto re-arm — one fresh PlayerCommand per landed hit, the real
+  wire rhythm that re-arms sprint-extra knockback. A stale cache here left
+  boxers permanently unsprinting after their first punch on OCM servers
+  while looking sprint-ish in open chase: the original "sometimes they
+  aren't trying to sprint" report.
 - **Aim model**: yaw/pitch chase the desired direction through a
   spring-damper with a max angular velocity. Underdamped springs naturally
   overshoot when a strafing target flips direction — overshoot is a physics

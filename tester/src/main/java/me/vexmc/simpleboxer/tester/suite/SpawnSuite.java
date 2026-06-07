@@ -101,11 +101,15 @@ public final class SpawnSuite {
                 new TestCase("spawn: boxer follows and reaches its target", context -> {
                     World world = Bukkit.getWorlds().get(0);
                     Location center = context.sync(() -> Arenas.arena(world, 100, 40));
-                    // The walker chases a dummy boxer 8 blocks north.
+                    // The walker chases a dummy boxer 8 blocks north. cps 0
+                    // keeps this a pure pursuit: a punching walker would
+                    // knock the post across the arena (sprint hits carry
+                    // the full era stamp under the combat stack) and the
+                    // pocket would never hold still.
                     Boxer post = Arenas.spawn("GoalPost", center.clone().add(0, 0, 8),
                                     DifficultyPresets.DUMMY);
                     Boxer walker = Arenas.spawn("Walker", center,
-                                    BoxerSettings.DEFAULTS);
+                                    BoxerSettings.DEFAULTS.withCps(0.0));
                     try {
                         context.awaitTicks(5);
                         context.syncRun(() -> walker.setTarget(post.player()));
@@ -132,8 +136,11 @@ public final class SpawnSuite {
                     Location center = context.sync(() -> Arenas.arena(world, 130, 40));
                     Boxer post = Arenas.spawn("PausePost", center.clone().add(0, 0, 8),
                                     DifficultyPresets.DUMMY);
+                    // cps 0: pause/resume is a brain-freeze contract — a
+                    // punching pacer would era-knock the post around under
+                    // the combat stack and turn the arrival await flaky.
                     Boxer pacer = Arenas.spawn("Pacer", center,
-                                    BoxerSettings.DEFAULTS);
+                                    BoxerSettings.DEFAULTS.withCps(0.0));
                     try {
                         context.awaitTicks(5);
                         context.syncRun(() -> {

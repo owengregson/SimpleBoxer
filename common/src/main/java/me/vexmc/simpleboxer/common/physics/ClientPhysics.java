@@ -79,6 +79,18 @@ public final class ClientPhysics {
     }
 
     /**
+     * Player.attack's sprint-hit self-slow: a successful full-meter sprint
+     * attack multiplies the ATTACKER's own horizontal motion ×0.6 (and
+     * clears the sprint flag — the brain's reconcile re-arms it). This is
+     * the client-side mechanic behind "high CPS reduces your own
+     * knockback": 0.6 per landed sprint hit.
+     */
+    public void multiplyHorizontalVelocity(double factor) {
+        this.vx *= factor;
+        this.vz *= factor;
+    }
+
+    /**
      * Position packet: snap there. Velocity survives a vanilla teleport;
      * ground state re-derives from the next tick's collision.
      */

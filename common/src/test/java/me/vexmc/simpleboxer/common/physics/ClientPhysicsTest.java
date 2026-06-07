@@ -304,6 +304,19 @@ class ClientPhysicsTest {
     }
 
     @Test
+    void sprintHitSelfSlowMultipliesHorizontalOnly() {
+        FlatWorld world = stone();
+        ClientPhysics physics = grounded(world);
+        physics.applyVelocity(0.25, 0.4, -0.1);
+        // The attacker's own ×0.6 on a landed full-meter sprint hit — the
+        // mechanic behind "high CPS reduces your own knockback".
+        physics.multiplyHorizontalVelocity(0.6);
+        assertEquals(0.15, physics.velocity().x(), 1.0E-12, "x slowed");
+        assertEquals(0.4, physics.velocity().y(), 1.0E-12, "vertical untouched");
+        assertEquals(-0.06, physics.velocity().z(), 1.0E-12, "z slowed");
+    }
+
+    @Test
     void pushAwayMatchesVanillaShoveMath() {
         // absMax 0.4 → divisor √0.4 ≈ 0.6325 (vanilla divides by √absMax,
         // not the norm); 1/√0.4 > 1 clamps to 1; shove = −(dx/√d) × 0.05F.
