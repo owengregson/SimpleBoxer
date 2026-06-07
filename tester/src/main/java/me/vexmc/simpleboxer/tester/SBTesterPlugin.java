@@ -10,6 +10,7 @@ import me.vexmc.simpleboxer.tester.suite.CombatSuite;
 import me.vexmc.simpleboxer.tester.suite.CommandSuite;
 import me.vexmc.simpleboxer.tester.suite.GuardSuite;
 import me.vexmc.simpleboxer.tester.suite.LatencySuite;
+import me.vexmc.simpleboxer.tester.suite.MovementSuite;
 import me.vexmc.simpleboxer.tester.suite.SpawnSuite;
 import org.bukkit.plugin.java.JavaPlugin;
 
@@ -62,6 +63,7 @@ public final class SBTesterPlugin extends JavaPlugin {
             starter[0].cancel();
             List<TestCase> suite = new ArrayList<>(BootSuite.tests(simpleBoxer));
             suite.addAll(SpawnSuite.tests(simpleBoxer));
+            suite.addAll(MovementSuite.tests());
             suite.addAll(CombatSuite.tests(this));
             suite.addAll(GuardSuite.tests());
             suite.addAll(LatencySuite.tests());

@@ -43,9 +43,13 @@ public record BoxerSettings(
     }
 
     /**
-     * How the boxer closes distance. {@code stopDistance} keeps it from
-     * body-blocking through the target (real players hold ~2.5 blocks in
-     * range-discipline trades).
+     * How the boxer closes distance. {@code stopDistance} is the range at
+     * which the forward key releases; 0 — the default — NEVER releases: the
+     * boxer holds W through its target and lets entity pushing resolve the
+     * pocket, exactly like a real W-holding rusher. Easing off in close
+     * drops sprint (vanilla needs forward impulse ≥ 0.8) and kills the
+     * momentum that survives combos — a raised ring is strictly for
+     * deliberate range-discipline sparring partners.
      */
     public record Movement(@NotNull Style style, double stopDistance, boolean sprint) {
 
@@ -60,7 +64,7 @@ public record BoxerSettings(
             STAND
         }
 
-        public static final Movement RUSH = new Movement(Style.RUSH, 2.5, true);
+        public static final Movement RUSH = new Movement(Style.RUSH, 0.0, true);
 
         public Movement {
             if (stopDistance < 0.0 || stopDistance > 6.0) {

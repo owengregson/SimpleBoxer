@@ -56,10 +56,16 @@ defaults:
     # rush (straight at the target) / strafe-circle (orbit in the pocket) /
     # strafe-weave (left-right on approach) / stand (feet planted).
     style: rush
-    # Blocks of range discipline — the boxer holds this distance instead of
-    # body-blocking through its target.
-    stop-distance: 2.5
-    # Sprint when closing distance.
+    # Blocks from the target at which the forward key releases. 0 — the
+    # default — NEVER releases: the boxer holds W through its target and
+    # entity pushing resolves the body contact, exactly like a real
+    # W-holding rusher. Easing off in the pocket drops sprint (vanilla
+    # needs forward impulse >= 0.8) and kills the momentum that survives
+    # combos. Raise it (e.g. 2.5) for deliberate range-discipline trades.
+    stop-distance: 0.0
+    # Hold sprint whenever the forward key is down. Boxers also obey the
+    # server's live movement-speed attribute, so Speed/Slowness potions
+    # and plugin modifiers change their pace like any real player's.
     sprint: true
   # Take every hit fully (knockback, immunity, hit events) but restore the
   # health afterwards. Damage is NEVER cancelled or reduced — that would

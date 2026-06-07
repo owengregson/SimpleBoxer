@@ -9,13 +9,16 @@ import me.vexmc.simpleboxer.api.Boxer;
 import me.vexmc.simpleboxer.common.aim.AimSpring;
 import me.vexmc.simpleboxer.common.combat.ClickScheduler;
 import me.vexmc.simpleboxer.common.latency.LatencyLine;
+import me.vexmc.simpleboxer.common.physics.Box;
 import me.vexmc.simpleboxer.common.physics.ClientPhysics;
 import me.vexmc.simpleboxer.common.physics.MoveInput;
+import me.vexmc.simpleboxer.common.physics.Vec3d;
 import me.vexmc.simpleboxer.common.settings.BoxerSettings;
 import me.vexmc.simpleboxer.nms.CapturedPacket;
 import me.vexmc.simpleboxer.nms.Inbound;
 import me.vexmc.simpleboxer.nms.NmsBridge;
 import me.vexmc.simpleboxer.nms.PacketIO;
+import org.bukkit.GameMode;
 import org.bukkit.Location;
 import org.bukkit.entity.Player;
 import org.jetbrains.annotations.NotNull;
@@ -55,6 +58,8 @@ final class BoxerImpl implements Boxer {
     private final LatencyLine<Action> actions = new LatencyLine<>();
     /** World snapshots aging into the brain's delayed view of its target. */
     private final LatencyLine<TargetView> perception = new LatencyLine<>();
+    /** Own attributes/effects aging in like UpdateAttributes packets would. */
+    private final LatencyLine<PlayerTraits.Traits> traits = new LatencyLine<>();
 
     private final ClickScheduler clicker;
 
@@ -165,6 +170,16 @@ final class BoxerImpl implements Boxer {
         if (perceived != null && !perceived.entity().isOnline()) {
             perceived = null;
         }
+        // Self-knowledge rides the same delayed wire: Speed/Slowness (the
+        // movement-speed attribute, from any source) and Jump Boost reach a
+        // real client as packets, so they reach the integrator through the
+        // perception delay too.
+        traits.offer(PlayerTraits.read(spawned.player()), now);
+        PlayerTraits.Traits knownTraits = traits.drainLatest(now, oneWay);
+        if (knownTraits != null) {
+            physics.setWalkSpeed(knownTraits.walkSpeed());
+            physics.setJumpBoostAmplifier(knownTraits.jumpBoostAmplifier());
+        }
 
         // 2. Decide + integrate, unless paused (a paused client still
         //    receives packets — knockback flies you around while AFK too).
@@ -173,6 +188,11 @@ final class BoxerImpl implements Boxer {
             considerClicking(now);
         }
         physics.step(input, aim.yaw(), collisionView);
+        // pushEntities, the client-predicted half: vanilla shoves the local
+        // player away from every overlapping body AFTER travel, the delta
+        // riding into the next tick's move. Paused boxers get shoved too —
+        // an AFK body is still a body.
+        pushAwayFromNeighbors();
 
         // 3. Report movement the way a real client does.
         queueMovement(now);
@@ -343,10 +363,15 @@ final class BoxerImpl implements Boxer {
         }
 
         double strafe = strafeInput(movement, distance);
+        // The default ring is 0: the forward key NEVER releases — easing
+        // off in the pocket drops sprint (vanilla needs impulse ≥ 0.8) and
+        // the momentum that survives combos. Entity pushing resolves the
+        // body contact, exactly as it does for a real W-holder. A raised
+        // ring is deliberate range discipline: hold the pocket, back out
+        // when overlapped.
         boolean inRange = distance <= movement.stopDistance();
         double forward;
         if (inRange) {
-            // Range discipline: hold the pocket, back out when overlapped.
             forward = distance < movement.stopDistance() - 0.8 ? -0.4 : 0.0;
         } else {
             forward = 1.0;
@@ -374,12 +399,15 @@ final class BoxerImpl implements Boxer {
                 return strafeSign;
             }
             case STRAFE_WEAVE -> {
-                // Weave on approach and in the pocket alike.
+                // Weave on approach and in the pocket alike. Keyboard
+                // impulses are digital — A/D is ±1 or nothing; the weave
+                // personality lives in the flip cadence, never in analog
+                // softening no real client could send.
                 if (--strafeFlipIn <= 0) {
                     strafeFlipIn = 8 + (int) (Math.abs(uuid.getMostSignificantBits() >> 8) % 7L);
                     strafeSign = -strafeSign;
                 }
-                return strafeSign * 0.7;
+                return strafeSign;
             }
             default -> {
                 return 0.0;
@@ -413,6 +441,33 @@ final class BoxerImpl implements Boxer {
             }
         }
         actions.offer(new Action.Swing(), now);
+    }
+
+    /**
+     * The client-predicted half of pushEntities: the shove away from every
+     * player whose box overlaps ours. Each party computes only its own half
+     * (a real neighbour's client — or boxer brain — computes theirs), which
+     * is why a W-holder bulldozes an AFK body instead of clipping through
+     * it. Live server positions stand in for the interpolated remotes a
+     * real client pushes against — entity interpolation is the one wire
+     * detail the brain does not model.
+     */
+    private void pushAwayFromNeighbors() {
+        Box self = physics.boundingBox();
+        for (Player other : spawned.player().getWorld().getPlayers()) {
+            if (other == spawned.player() || other.isDead()
+                    || other.getGameMode() == GameMode.SPECTATOR) {
+                continue;
+            }
+            Location where = other.getLocation();
+            if (!self.intersects(Box.player(where.getX(), where.getY(), where.getZ(),
+                    ClientPhysics.PLAYER_WIDTH, ClientPhysics.PLAYER_HEIGHT))) {
+                continue;
+            }
+            Vec3d shove = ClientPhysics.pushAway(physics.x(), physics.z(),
+                    where.getX(), where.getZ());
+            physics.addVelocity(shove.x(), 0.0, shove.z());
+        }
     }
 
     /** A hit this boxer threw landed (server confirmation, owning thread). */

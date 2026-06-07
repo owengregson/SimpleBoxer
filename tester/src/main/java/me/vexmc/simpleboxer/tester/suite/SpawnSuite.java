@@ -109,17 +109,18 @@ public final class SpawnSuite {
                     try {
                         context.awaitTicks(5);
                         context.syncRun(() -> walker.setTarget(post.player()));
+                        // The relentless default presses into the pocket —
+                        // far past where a stop ring would park. Entity
+                        // pushing (not a released key) is what holds the
+                        // pair apart from there.
                         context.awaitUntil(() -> {
                             try {
                                 return walker.player().getLocation()
-                                        .distance(post.player().getLocation()) < 3.2;
+                                        .distance(post.player().getLocation()) < 1.6;
                             } catch (Throwable gone) {
                                 return false;
                             }
-                        }, 100, "walker to sprint to its target");
-                        context.expect(walker.player().getLocation().distance(
-                                        post.player().getLocation()) > 1.5,
-                                "walker holds stop distance instead of body-blocking");
+                        }, 100, "walker to press into the pocket");
                     } finally {
                         context.syncRun(walker::remove);
                         context.syncRun(post::remove);

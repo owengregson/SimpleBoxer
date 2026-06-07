@@ -130,6 +130,19 @@ world snapshot ──► PerceptionLine (delay = ping/2) ──► Behavior (int
   stamped the knock, like a real laggy client. The *action* line delays
   decided actions (movement, clicks) on their way to the handlers.
   Timestamp-deadline queues, tick-quantized exactly like real netty arrival.
+- **Self-knowledge rides the wire too**: the boxer's movement-speed
+  attribute (Speed/Slowness potions, armor or plugin modifiers — the
+  server's sprint modifier stripped, since the integrator applies its own
+  ×1.3 from the held key) and its Jump Boost amplifier snapshot each tick
+  and age through the perception line — the in-process stand-in for
+  `ClientboundUpdateAttributes` / `UpdateMobEffect`.
+- **The pocket is pushed, not parked**: the brain runs the client-predicted
+  half of `pushEntities` (the 0.05-per-overlap shove, vanilla's quirky
+  √absMax math), so a W-holding boxer bulldozes through bodies exactly like
+  a real client. The default movement therefore never releases forward —
+  releasing in the pocket drops sprint (vanilla needs forward impulse
+  ≥ 0.8) and the momentum that survives combos. `stop-distance` rings, and
+  the analog-free ±1 strafe keys, are explicit opt-ins on top.
 - **Aim model**: yaw/pitch chase the desired direction through a
   spring-damper with a max angular velocity. Underdamped springs naturally
   overshoot when a strafing target flips direction — overshoot is a physics

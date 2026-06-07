@@ -24,12 +24,12 @@ public final class DifficultyPresets {
     /** Stands still, never attacks — the punching bag. */
     public static final BoxerSettings DUMMY = new BoxerSettings(
             0, 0.0, 0.0, AimParams.SMOOTH, 3.0, 180.0,
-            WTap.OFF, new Movement(Movement.Style.STAND, 2.5, false), true, true);
+            WTap.OFF, new Movement(Movement.Style.STAND, 0.0, false), true, true);
 
     /** High ping, slow sloppy clicks, drifting aim, walks rather than sprints. */
     public static final BoxerSettings EASY = new BoxerSettings(
             120, 4.0, 0.5, AimParams.SLOPPY, 2.8, 18.0,
-            WTap.OFF, new Movement(Movement.Style.RUSH, 2.8, false), true, true);
+            WTap.OFF, new Movement(Movement.Style.RUSH, 0.0, false), true, true);
 
     /** An ordinary player: average ping, mid CPS, smooth-pursuit aim. */
     public static final BoxerSettings MEDIUM = new BoxerSettings(
@@ -44,7 +44,7 @@ public final class DifficultyPresets {
     /** Tournament-grade: tight aim spring, fast taps, circles its target. */
     public static final BoxerSettings EXPERT = new BoxerSettings(
             15, 13.0, 0.15, new AimParams(0.70, 0.25, 80.0), 3.0, 5.0,
-            new WTap(true, 0, 2), new Movement(Movement.Style.STRAFE_CIRCLE, 2.6, true), true, true);
+            new WTap(true, 0, 2), new Movement(Movement.Style.STRAFE_CIRCLE, 0.0, true), true, true);
 
     /** The machine: zero ping, locked aim, saturated clicks — a calibrator. */
     public static final BoxerSettings AIMBOT = new BoxerSettings(
