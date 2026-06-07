@@ -57,6 +57,10 @@ public final class PacketIO {
     private Constructor<?> clientCommandConstructor;
     private Object performRespawn;
 
+    private @Nullable Constructor<?> inputRecordConstructor;
+    private @Nullable Constructor<?> inputPacketConstructor;
+    private @Nullable Constructor<?> playerLoadedConstructor;
+
     private Class<?> motionPacketClass;
     private Field motionId;
     private Field @Nullable [] motionInts;
@@ -160,6 +164,32 @@ public final class PacketIO {
         Class<?> respawnActionClass = nestedEnum(clientCommandClass, "Action");
         performRespawn = enumByNameContains(respawnActionClass, "RESPAWN", 0);
         clientCommandConstructor = clientCommandClass.getConstructor(respawnActionClass);
+
+        // 1.21.2+ streams the whole keyboard as an Input record (the
+        // pre-1.21.2 packet of the same name is the vehicle-steering float
+        // form — the record class gates the lookup), and 1.21.4+ answers the
+        // client-loaded handshake with a dedicated empty packet. Both are
+        // modern-only, therefore Mojang-named at runtime; absence simply
+        // means the server has no such contract and there is nothing to send.
+        try {
+            Class<?> inputClass = bridge.nmsClass("net.minecraft.world.entity.player.Input");
+            Class<?> inputPacketClass = bridge.nmsClass(
+                    "net.minecraft.network.protocol.game.ServerboundPlayerInputPacket");
+            inputRecordConstructor = inputClass.getConstructor(
+                    boolean.class, boolean.class, boolean.class, boolean.class,
+                    boolean.class, boolean.class, boolean.class);
+            inputPacketConstructor = inputPacketClass.getConstructor(inputClass);
+        } catch (ReflectiveOperationException preKeyboardStream) {
+            inputRecordConstructor = null;
+            inputPacketConstructor = null;
+        }
+        try {
+            Class<?> loadedClass = bridge.nmsClass(
+                    "net.minecraft.network.protocol.game.ServerboundPlayerLoadedPacket");
+            playerLoadedConstructor = loadedClass.getConstructor();
+        } catch (ReflectiveOperationException preLoadedHandshake) {
+            playerLoadedConstructor = null;
+        }
 
         // Clientbound shapes.
         motionPacketClass = bridge.nmsClass(
@@ -332,6 +362,36 @@ public final class PacketIO {
 
     public @NotNull Object respawn() throws ReflectiveOperationException {
         return clientCommandConstructor.newInstance(performRespawn);
+    }
+
+    /**
+     * The whole-keyboard state (1.21.2+), the packet a real client sends
+     * whenever its held keys change. The server fires
+     * {@code PlayerInputEvent} from it, derives sneak from {@code shift},
+     * and steers ridden vehicles by it. {@code null} below 1.21.2 — that
+     * era's input packet is the vehicle-steering form a walking client
+     * never sends.
+     */
+    public @Nullable Object playerInput(boolean forward, boolean backward, boolean left,
+            boolean right, boolean jump, boolean shift, boolean sprint)
+            throws ReflectiveOperationException {
+        if (inputPacketConstructor == null || inputRecordConstructor == null) {
+            return null;
+        }
+        return inputPacketConstructor.newInstance(inputRecordConstructor.newInstance(
+                forward, backward, left, right, jump, shift, sprint));
+    }
+
+    /**
+     * The client-loaded handshake (1.21.4+). The server arms a 60-tick gate
+     * at every ServerGamePacketListener construction and again on every
+     * respawn; until the client answers (or the gate times out), sprint
+     * commands, interactions and movement are silently dropped. A real
+     * client answers the moment its level renders. {@code null} where the
+     * server has no such gate.
+     */
+    public @Nullable Object playerLoaded() throws ReflectiveOperationException {
+        return playerLoadedConstructor == null ? null : playerLoadedConstructor.newInstance();
     }
 
     /* ------------------------------------------------------------------ */

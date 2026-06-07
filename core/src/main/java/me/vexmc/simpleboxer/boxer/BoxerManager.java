@@ -145,6 +145,12 @@ public final class BoxerManager implements BoxerService {
         }
         holder[0] = boxer;
 
+        // Answer the 1.21.4+ client-loaded handshake before the brain's
+        // first packets — a real client answers when its level renders, and
+        // an unanswered gate re-armed by a respawn silently drops sprint
+        // commands and attacks for three seconds.
+        boxer.declareClientLoaded();
+
         byUuid.put(uuid, boxer);
         byName.put(key, boxer);
 

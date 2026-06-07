@@ -96,6 +96,9 @@ final class BoxerImpl implements Boxer {
 
         record Sprint(boolean start) implements Action {}
 
+        record Input(boolean forward, boolean backward, boolean left, boolean right,
+                boolean jump, boolean shift, boolean sprint) implements Action {}
+
         record AcceptTeleport(int id) implements Action {}
 
         record Attack(@NotNull Player victim) implements Action {}
@@ -106,6 +109,8 @@ final class BoxerImpl implements Boxer {
     private boolean serverSprinting;
     /** Sprint PlayerCommands queued on the action line but not yet shipped. */
     private int sprintActionsInFlight;
+    /** The keyboard state last queued for the wire — input ships on change. */
+    private @Nullable Action.Input lastQueuedInput;
 
     BoxerImpl(
             @NotNull String name,
@@ -186,6 +191,7 @@ final class BoxerImpl implements Boxer {
         // 2. Decide + integrate, unless paused (a paused client still
         //    receives packets — knockback flies you around while AFK too).
         MoveInput input = paused ? MoveInput.IDLE : decideInput();
+        queueInput(input, now);
         if (!paused) {
             considerClicking(now);
         }
@@ -255,6 +261,11 @@ final class BoxerImpl implements Boxer {
                 // (the teleport packet also arrives through the normal path).
                 Location location = spawned.player().getLocation();
                 physics.teleport(location.getX(), location.getY(), location.getZ());
+                // Respawn re-armed the server's client-loaded gate; without
+                // a fresh answer the next three seconds of sprint commands
+                // and attacks would be silently dropped.
+                declareClientLoaded();
+                lastQueuedInput = null; // re-state the keyboard to the new listener
             }
         } catch (Throwable unresolved) {
             // Keep the old handle; the next tick retries.
@@ -526,6 +537,43 @@ final class BoxerImpl implements Boxer {
         actions.offer(new Action.Sprint(sprinting), System.nanoTime());
     }
 
+    /**
+     * The whole-keyboard state, queued on change — the exact rhythm a real
+     * 1.21.2+ client ships its {@code player_input} packets with. The server
+     * fires {@code PlayerInputEvent} from it and steers vehicles by it;
+     * below 1.21.2 the factory resolves to nothing and no packet exists to
+     * send. Strafe is vanilla's left-positive convention on both sides.
+     */
+    private void queueInput(@NotNull MoveInput input, long now) {
+        Action.Input flags = new Action.Input(
+                input.forward() > 0.0, input.forward() < 0.0,
+                input.strafe() > 0.0, input.strafe() < 0.0,
+                input.jump(), input.sneak(), input.sprint());
+        if (flags.equals(lastQueuedInput)) {
+            return;
+        }
+        lastQueuedInput = flags;
+        actions.offer(flags, now);
+    }
+
+    /**
+     * Answers the client-loaded handshake. 1.21.4+ servers arm a 60-tick
+     * gate at listener construction and re-arm it on every respawn; until
+     * the answer (or the timeout) arrives, sprint commands, interactions
+     * and movement are silently dropped. A real client answers as soon as
+     * its level renders — for a spawned brain that is immediately.
+     */
+    void declareClientLoaded() {
+        try {
+            Object packet = packetIO.playerLoaded();
+            if (packet != null) {
+                packetIO.dispatch(packet, spawned.gameListener());
+            }
+        } catch (Throwable failure) {
+            logger.warning("[" + name + "] client-loaded handshake failed: " + failure);
+        }
+    }
+
     private void queueMovement(long now) {
         double x = physics.x();
         double y = physics.y();
@@ -568,6 +616,17 @@ final class BoxerImpl implements Boxer {
                 packetIO.dispatch(
                         packetIO.sprint(spawned.serverPlayer(), spawned.entityId(), sprint.start()),
                         spawned.gameListener());
+                if (DEBUG) {
+                    logger.info("[debug " + name + "] sprint cmd " + sprint.start()
+                            + " -> live=" + spawned.player().isSprinting());
+                }
+            } else if (action instanceof Action.Input input) {
+                Object packet = packetIO.playerInput(
+                        input.forward(), input.backward(), input.left(), input.right(),
+                        input.jump(), input.shift(), input.sprint());
+                if (packet != null) {
+                    packetIO.dispatch(packet, spawned.gameListener());
+                }
             } else if (action instanceof Action.AcceptTeleport accept) {
                 if (DEBUG) {
                     logger.info("[debug " + name + "] accept dispatched id=" + accept.id());
