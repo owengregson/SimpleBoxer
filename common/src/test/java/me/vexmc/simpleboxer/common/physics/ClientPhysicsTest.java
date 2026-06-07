@@ -121,6 +121,25 @@ class ClientPhysicsTest {
     }
 
     @Test
+    void speedAttributeScalesGroundSprintLinearly() {
+        FlatWorld world = stone();
+        ClientPhysics physics = grounded(world);
+        // Speed I is a +20% MULTIPLY_TOTAL modifier on the movement-speed
+        // attribute; ground acceleration is attribute-proportional, so the
+        // terminal displacement scales linearly. Air acceleration is the
+        // fixed 0.026 and does NOT scale (pinned by
+        // airborneSprintConvergesOnAirAcceleration) — vanilla truth.
+        physics.setWalkSpeed(0.1 * 1.2);
+        double perTick = 0.0;
+        for (int tick = 0; tick < 200; tick++) {
+            double before = physics.z();
+            physics.step(MoveInput.sprintForward(), 0.0f, world);
+            perTick = physics.z() - before;
+        }
+        assertEquals(SPRINT_TERMINAL * 1.2, perTick, 1.0E-6, "Speed I sprint displacement per tick");
+    }
+
+    @Test
     void airborneSprintConvergesOnAirAcceleration() {
         FlatWorld world = new FlatWorld(0.6, false); // bottomless — free fall
         ClientPhysics physics = new ClientPhysics(0.0, 0.0, 0.0);
@@ -282,6 +301,24 @@ class ClientPhysicsTest {
             highest = Math.max(highest, physics.y());
         }
         assertEquals(0.2, highest, 1.0E-9, "never re-rises after the bump");
+    }
+
+    @Test
+    void pushAwayMatchesVanillaShoveMath() {
+        // absMax 0.4 → divisor √0.4 ≈ 0.6325 (vanilla divides by √absMax,
+        // not the norm); 1/√0.4 > 1 clamps to 1; shove = −(dx/√d) × 0.05F.
+        Vec3d shove = ClientPhysics.pushAway(0.0, 0.0, 0.4, 0.0);
+        assertEquals(-(0.4 / Math.sqrt(0.4)) * ClientPhysics.PUSH_STRENGTH, shove.x(), 1.0E-12,
+                "head-on overlap shove");
+        assertEquals(0.0, shove.z(), 1.0E-12, "no sideways component head-on");
+        // Diagonal: both axes share the √absMax divisor and the 0.05 scale.
+        Vec3d diagonal = ClientPhysics.pushAway(0.0, 0.0, 0.3, -0.4);
+        double divisor = Math.sqrt(0.4);
+        assertEquals(-(0.3 / divisor) * ClientPhysics.PUSH_STRENGTH, diagonal.x(), 1.0E-12);
+        assertEquals((0.4 / divisor) * ClientPhysics.PUSH_STRENGTH, diagonal.z(), 1.0E-12);
+        // The 0.01 dead zone: perfectly stacked entities shove nobody.
+        assertEquals(Vec3d.ZERO, ClientPhysics.pushAway(0.0, 0.0, 0.005, 0.005),
+                "degenerate stack is inert");
     }
 
     @Test

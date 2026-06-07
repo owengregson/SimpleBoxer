@@ -62,6 +62,36 @@ Order matters; each step cites its decompile anchor.
 | STEP_HEIGHT | 0.6 |
 | ENTITY_INTERACTION_RANGE | 3.0 (modern attack-reach default) |
 
+The client reads MOVEMENT_SPEED from its attribute map, synced by
+`ClientboundUpdateAttributesPacket` — Speed/Slowness potions, armor and
+plugin modifiers all arrive that way, and `setSprinting` installs the ×1.3
+modifier locally on BOTH sides. The brain stands in for the packet by
+snapshotting the server-side Bukkit attribute each tick (sprint modifier
+stripped — the integrator applies its own ×1.3 from the held key) and
+aging it through the perception line; Jump Boost rides the same snapshot
+in place of `ClientboundUpdateMobEffectPacket`. Air acceleration is the
+hard-coded 0.02 / 0.026 (`Player.getFlyingSpeed`) — attribute-immune,
+which is why Speed potions do nothing mid-air.
+
+## Entity pushing (client-predicted, `Entity.push(Entity)`)
+
+`LivingEntity.aiStep` runs `pushEntities()` AFTER travel — for every
+player whose box overlaps (modern: no inflation), each side adds a shove
+to its own deltaMovement that rides into the NEXT tick's move:
+
+```
+dx = other.x − x;  dz = other.z − z;  d = absMax(dx, dz)
+if d ≥ 0.01:  d = √d;  shove = −(dx/d, dz/d) × min(1/d, 1) × 0.05F
+```
+
+The divisor is `√absMax`, not the vector norm (vanilla's ancient quirk),
+and 0.05F promotes to 0.05000000074505806. The client predicts this for
+its LOCAL player only — remote entities are interpolated, so each party
+computes exactly its own half. This is why a W-holder bulldozes an AFK
+body instead of stopping at it, and why the brain must model it: the
+boxer's server entity follows only its move packets, so an unmodeled
+pocket would let boxers stand inside their targets.
+
 ## Slipperiness (block under feet)
 
 Default 0.6 (→ ground drag 0.546); ICE / PACKED_ICE / FROSTED_ICE 0.98;
@@ -90,5 +120,6 @@ Per-tick displacement at steady state is `a / (1 − f1)` (carry converges to
   the brain avoids the rest.
 - Step-up uses the classic full-step retry rather than 1.20's candidate
   enumeration — identical outcomes on ordinary stairs/slabs ≤ 0.6.
-- Entity-entity collision pushing is not modeled client-side (the server
-  pushes the boxer's ServerPlayer; position packets re-sync us).
+- Entity pushing reads LIVE server positions for neighbours rather than
+  client-interpolated ones — interpolation is the one wire detail the
+  brain does not model.

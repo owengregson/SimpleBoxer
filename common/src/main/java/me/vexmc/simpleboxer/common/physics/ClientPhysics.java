@@ -31,6 +31,8 @@ public final class ClientPhysics {
     public static final double SPRINT_AIR_ACCEL = 0.025999999;
     public static final double WALK_AIR_ACCEL = 0.02;
     public static final double SPRINT_JUMP_PUSH = 0.2;
+    /** Entity.push's 0.05F shove, double-promoted exactly as vanilla does. */
+    public static final double PUSH_STRENGTH = 0.05000000074505806;
     public static final double PLAYER_WIDTH = 0.6;
     public static final double PLAYER_HEIGHT = 1.8;
     public static final double STEP_HEIGHT = 0.6;
@@ -165,6 +167,29 @@ public final class ClientPhysics {
             this.vx += -Math.sin(yaw) * SPRINT_JUMP_PUSH;
             this.vz += Math.cos(yaw) * SPRINT_JUMP_PUSH;
         }
+    }
+
+    /**
+     * Entity.push(Entity), the half that moves THIS entity: the shove away
+     * from one overlapping neighbour, with vanilla's quirky normalization
+     * (the divisor is √absMax(dx,dz), not the vector norm). The client
+     * predicts this for its local player every tick — it is why a W-holder
+     * bulldozes an AFK body instead of stopping at it, and the emulator
+     * needs it for the same reason. The neighbour's own shove is the other
+     * party's problem, exactly as on the wire.
+     */
+    public static @NotNull Vec3d pushAway(double selfX, double selfZ, double otherX, double otherZ) {
+        double dx = otherX - selfX;
+        double dz = otherZ - selfZ;
+        double d = Math.max(Math.abs(dx), Math.abs(dz));
+        if (d < 0.01) {
+            return Vec3d.ZERO;
+        }
+        d = Math.sqrt(d);
+        dx /= d;
+        dz /= d;
+        double scale = Math.min(1.0 / d, 1.0) * PUSH_STRENGTH;
+        return new Vec3d(-dx * scale, 0.0, -dz * scale);
     }
 
     /** Entity.getInputVector: normalize only above unit length, scale, rotate. */
