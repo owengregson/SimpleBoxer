@@ -96,7 +96,11 @@ public final class BoxerCommands implements TabExecutor {
                 skinOwner = argument.substring("skin:".length());
             } else if (lower.startsWith("target:")) {
                 targetName = argument.substring("target:".length());
-            } else if (lower.equals("at") && i + 3 < args.length) {
+            } else if (lower.equals("at")) {
+                if (i + 3 >= args.length) {
+                    sender.sendMessage("§c'at' needs three coordinates: at <x> <y> <z>.");
+                    return;
+                }
                 try {
                     location = new Location(
                             sender instanceof Player player ? player.getWorld()
@@ -251,9 +255,9 @@ public final class BoxerCommands implements TabExecutor {
         String value = args[3];
         try {
             BoxerSettings updated = switch (key) {
-                case "ping" -> boxer.settings().withPingMs(Integer.parseInt(value));
-                case "cps" -> boxer.settings().withCps(Double.parseDouble(value));
-                case "reach" -> boxer.settings().withReach(Double.parseDouble(value));
+                case "ping" -> boxer.settings().withPingMs(parseInt("ping", value));
+                case "cps" -> boxer.settings().withCps(parseDouble("cps", value));
+                case "reach" -> boxer.settings().withReach(parseDouble("reach", value));
                 case "aim" -> {
                     AimParams aim = BoxerSettingsParser.aimPresetByName(value);
                     if (aim == null) {
@@ -263,22 +267,22 @@ public final class BoxerCommands implements TabExecutor {
                     yield boxer.settings().withAim(aim);
                 }
                 case "wtap" -> boxer.settings().withWtap(new BoxerSettings.WTap(
-                        Boolean.parseBoolean(value),
+                        parseBoolean("wtap", value),
                         boxer.settings().wtap().delayTicks(),
                         boxer.settings().wtap().releaseTicks()));
                 case "preset" -> {
                     BoxerSettings preset = config.snapshot().preset(value);
                     if (preset == null) {
-                        throw new IllegalArgumentException("unknown preset '" + value + "'");
+                        throw new IllegalArgumentException("unknown preset '" + value
+                                + "'. Known: " + String.join(", ", config.snapshot().presetNames()));
                     }
                     yield preset;
                 }
                 case "movement" -> boxer.settings().withMovement(new BoxerSettings.Movement(
-                        BoxerSettings.Movement.Style.valueOf(
-                                value.toUpperCase(Locale.ROOT).replace('-', '_')),
+                        parseStyle(value),
                         boxer.settings().movement().stopDistance(),
                         boxer.settings().movement().sprint()));
-                case "invincible" -> boxer.settings().withInvincible(Boolean.parseBoolean(value));
+                case "invincible" -> boxer.settings().withInvincible(parseBoolean("invincible", value));
                 default -> throw new IllegalArgumentException(
                         "keys: " + String.join(", ", SET_KEYS));
             };
@@ -332,6 +336,43 @@ public final class BoxerCommands implements TabExecutor {
             sender.sendMessage("§cNo boxer named '" + name + "'. /boxer list shows them.");
         }
         return boxer;
+    }
+
+    /* Plain-prose parsing — never leak a raw JDK exception to the sender. */
+
+    private static int parseInt(String key, String value) {
+        try {
+            return Integer.parseInt(value.trim());
+        } catch (NumberFormatException notANumber) {
+            throw new IllegalArgumentException(key + " expects a whole number, not '" + value + "'.");
+        }
+    }
+
+    private static double parseDouble(String key, String value) {
+        try {
+            return Double.parseDouble(value.trim());
+        } catch (NumberFormatException notANumber) {
+            throw new IllegalArgumentException(key + " expects a number, not '" + value + "'.");
+        }
+    }
+
+    private static boolean parseBoolean(String key, String value) {
+        return switch (value.trim().toLowerCase(Locale.ROOT)) {
+            case "true", "on", "yes" -> true;
+            case "false", "off", "no" -> false;
+            default -> throw new IllegalArgumentException(
+                    key + " expects true or false, not '" + value + "'.");
+        };
+    }
+
+    private static BoxerSettings.Movement.Style parseStyle(String value) {
+        try {
+            return BoxerSettings.Movement.Style.valueOf(
+                    value.trim().toUpperCase(Locale.ROOT).replace('-', '_'));
+        } catch (IllegalArgumentException unknown) {
+            throw new IllegalArgumentException(
+                    "movement styles: rush, strafe-circle, strafe-weave, stand");
+        }
     }
 
     private static String rootMessage(Throwable failure) {
