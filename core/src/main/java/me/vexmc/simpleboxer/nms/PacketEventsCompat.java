@@ -1,8 +1,13 @@
 package me.vexmc.simpleboxer.nms;
 
 import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Deque;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import java.util.logging.Logger;
 import org.bukkit.Bukkit;
@@ -111,9 +116,20 @@ final class PacketEventsCompat {
                             + ") but getAPI() is null — integration disabled this session.");
                     return;
                 }
-                Object pm = api.getClass().getMethod("getProtocolManager").invoke(api);
-                Method setChannel = findMethod(pm.getClass(), "setChannel", 2);
-                Method removeChannel = findMethod(pm.getClass(), "removeChannelById", 1);
+                // getAPI() hands back a non-public anonymous implementation
+                // (e.g. SpigotPacketEventsBuilder$1). A method taken straight off that
+                // concrete class is public yet refuses to invoke
+                // (IllegalAccessException), so every call must be resolved on a *public*
+                // supertype — the PacketEventsAPI / ProtocolManager interfaces.
+                Method getProtocolManager = accessibleMethod(api.getClass(), "getProtocolManager", 0);
+                if (getProtocolManager == null) {
+                    logger.warning("PacketEvents found (" + packetEventsClass.getName()
+                            + ") but getProtocolManager() is not resolvable — integration disabled.");
+                    return;
+                }
+                Object pm = getProtocolManager.invoke(api);
+                Method setChannel = accessibleMethod(pm.getClass(), "setChannel", 2);
+                Method removeChannel = accessibleMethod(pm.getClass(), "removeChannelById", 1);
                 this.protocolManager = pm;
                 this.setChannelMethod = setChannel;
                 this.removeChannelMethod = removeChannel;
@@ -197,12 +213,51 @@ final class PacketEventsCompat {
         }
     }
 
-    private static @Nullable Method findMethod(@NotNull Class<?> owner, @NotNull String name, int paramCount) {
-        for (Method method : owner.getMethods()) {
-            if (method.getName().equals(name) && method.getParameterCount() == paramCount) {
-                return method;
+    /**
+     * Resolve a public method by name + arity on the first <em>public</em> type in
+     * {@code runtimeType}'s hierarchy that declares it. PacketEvents returns
+     * instances of non-public anonymous classes; a method pulled straight off such
+     * a class is public yet uninvokable ({@code IllegalAccessException}), so we look
+     * it up on the public interface (or superclass) that actually declares it and
+     * only fall back to {@code setAccessible} when no public declarer exists.
+     */
+    private static @Nullable Method accessibleMethod(@NotNull Class<?> runtimeType,
+                                                     @NotNull String name, int arity) {
+        Deque<Class<?>> queue = new ArrayDeque<>();
+        Set<Class<?>> seen = new HashSet<>();
+        queue.add(runtimeType);
+        Method fallback = null;
+        while (!queue.isEmpty()) {
+            Class<?> type = queue.poll();
+            if (type == null || !seen.add(type)) {
+                continue;
+            }
+            for (Method method : type.getDeclaredMethods()) {
+                if (!method.getName().equals(name)
+                        || method.getParameterCount() != arity
+                        || method.isBridge()
+                        || !Modifier.isPublic(method.getModifiers())) {
+                    continue;
+                }
+                if (Modifier.isPublic(type.getModifiers())) {
+                    return method; // declared on a public type → directly invokable
+                }
+                fallback = method; // public method on a non-public type → needs setAccessible
+            }
+            if (type.getSuperclass() != null) {
+                queue.add(type.getSuperclass());
+            }
+            for (Class<?> iface : type.getInterfaces()) {
+                queue.add(iface);
             }
         }
-        return null;
+        if (fallback != null) {
+            try {
+                fallback.setAccessible(true);
+            } catch (Throwable notPermitted) {
+                // Best effort; invocation may still fail and is reported by the caller.
+            }
+        }
+        return fallback;
     }
 }
