@@ -107,8 +107,16 @@ public final class NmsBridge {
 
         // The login pipeline relocates new players to the world spawn; the
         // Bukkit teleport afterwards is the authoritative way to take them
-        // to the requested location on every version.
-        bukkitPlayer.teleport(location);
+        // to the requested location on every version. Folia forbids a
+        // synchronous teleport from a region thread ("must use teleportAsync
+        // while in region threading") — fall back to the async form, which is
+        // valid here because spawn() already runs on the location's owning
+        // region thread (teleportAsync exists in the floor Paper API).
+        try {
+            bukkitPlayer.teleport(location);
+        } catch (UnsupportedOperationException foliaRegionThreading) {
+            bukkitPlayer.teleportAsync(location);
+        }
 
         // Modern placeNewPlayer builds its OWN game listener, replacing the
         // bootstrap one — the live listener must be read back off the player

@@ -30,10 +30,11 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 /**
- * The boxer registry and lifecycle owner. Spawning runs on the main thread
- * (the NMS bootstrap's requirement); each boxer then ticks on its own
- * owning-thread task, and shutdown despawns everyone — boxers are ephemeral
- * test fixtures, never persisted.
+ * The boxer registry and lifecycle owner. Spawning runs on the thread that
+ * owns the spawn location's region (the NMS bootstrap's requirement — the main
+ * thread on classic servers, the location's region thread on Folia); each
+ * boxer then ticks on its own owning-thread task, and shutdown despawns
+ * everyone — boxers are ephemeral test fixtures, never persisted.
  */
 public final class BoxerManager implements BoxerService {
 
@@ -73,15 +74,15 @@ public final class BoxerManager implements BoxerService {
             skins.lookup(request.skinOwner()).whenComplete((textures, lookupFailure) -> {
                 NmsBridge.SkinTextures skin =
                         textures == null ? null : textures.orElse(null);
-                completeOnMain(request, skin, future);
+                dispatchSpawn(request, skin, future);
             });
         } else {
-            completeOnMain(request, null, future);
+            dispatchSpawn(request, null, future);
         }
         return future;
     }
 
-    private void completeOnMain(BoxerSpawnRequest request,
+    private void dispatchSpawn(BoxerSpawnRequest request,
             @Nullable NmsBridge.SkinTextures skin, CompletableFuture<Boxer> future) {
         Runnable work = () -> {
             try {
@@ -97,16 +98,20 @@ public final class BoxerManager implements BoxerService {
                 future.completeExceptionally(failure);
             }
         };
-        // Inline on the main thread — a caller already there must get a
-        // completed future back (waiting on a scheduled hop would deadlock).
-        if (Bukkit.isPrimaryThread()) {
+        // The NMS bootstrap (player-list placement, ServerLevel writes) is only
+        // legal on the thread that owns the spawn location's region: the main
+        // thread on classic servers, the location's region thread on Folia.
+        // Run inline when the caller is already there — a same-thread waiter
+        // blocking on the returned future would deadlock on a scheduled hop;
+        // otherwise hop to the owning region.
+        if (scheduling.ownsRegion(request.location())) {
             work.run();
         } else {
-            scheduling.runGlobal(work);
+            scheduling.runAt(request.location(), work);
         }
     }
 
-    /** Main thread only. */
+    /** Runs on the thread owning the spawn location's region (see {@link #dispatchSpawn}). */
     private @NotNull Boxer spawnNow(@NotNull BoxerSpawnRequest request,
             @Nullable NmsBridge.SkinTextures skin) throws Exception {
         String key = request.name().toLowerCase(Locale.ROOT);

@@ -37,6 +37,11 @@ public final class BukkitScheduling implements Scheduling {
     }
 
     @Override
+    public boolean ownsRegion(@NotNull Location location) {
+        return Bukkit.isPrimaryThread();
+    }
+
+    @Override
     public void runOn(@NotNull Entity entity, @NotNull Runnable task, @NotNull Runnable retired) {
         Bukkit.getScheduler().runTask(plugin, () -> {
             if (live(entity)) {

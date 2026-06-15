@@ -2,6 +2,10 @@ name: SimpleBoxer
 version: '${version}'
 main: me.vexmc.simpleboxer.SimpleBoxerPlugin
 api-version: '1.17'
+# Region-threaded server support. Without this key Folia refuses to load the
+# plugin at all; with it, SimpleBoxer routes every spawn/tick/teleport through
+# the region-aware schedulers (see platform.FoliaScheduling).
+folia-supported: true
 description: Virtual sparring players — player-identical bots with configurable ping, aim, CPS, movement and difficulty, built for combat-plugin testing.
 authors: [owengregson]
 website: https://github.com/owengregson/SimpleBoxer

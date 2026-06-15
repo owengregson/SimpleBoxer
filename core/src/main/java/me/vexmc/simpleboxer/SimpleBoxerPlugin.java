@@ -9,6 +9,8 @@ import me.vexmc.simpleboxer.config.ConfigStore;
 import me.vexmc.simpleboxer.guard.SurvivalGuards;
 import me.vexmc.simpleboxer.identity.BoxerJoinListener;
 import me.vexmc.simpleboxer.platform.BukkitScheduling;
+import me.vexmc.simpleboxer.platform.FoliaScheduling;
+import me.vexmc.simpleboxer.platform.FoliaSupport;
 import org.bukkit.command.PluginCommand;
 import org.bukkit.plugin.ServicePriority;
 import org.bukkit.plugin.java.JavaPlugin;
@@ -31,7 +33,16 @@ public final class SimpleBoxerPlugin extends JavaPlugin {
 
     @Override
     public void onEnable() {
-        this.scheduling = new BukkitScheduling(this);
+        try {
+            this.scheduling = FoliaSupport.isFolia()
+                    ? new FoliaScheduling(this)
+                    : new BukkitScheduling(this);
+        } catch (ReflectiveOperationException foliaApiMissing) {
+            getLogger().severe("Folia detected but its scheduler API is not resolvable: "
+                    + foliaApiMissing);
+            getServer().getPluginManager().disablePlugin(this);
+            return;
+        }
         this.configStore = new ConfigStore(this);
         try {
             this.boxerManager = new BoxerManager(this, scheduling, configStore);

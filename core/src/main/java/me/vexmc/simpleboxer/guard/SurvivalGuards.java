@@ -69,22 +69,24 @@ public final class SurvivalGuards implements Listener {
         event.setDroppedExp(0);
 
         Location deathSpot = player.getLocation().clone();
-        // runGlobal, not runOn: a DEAD entity fails runOn's validity gate
-        // and the respawn would silently never dispatch.
-        scheduling.runGlobal(() -> {
+        // On Folia a player respawn and teleport are only legal on the
+        // player's own region thread — runOn lands there (the global thread
+        // would throw). A dead player is still online, so runOn's validity
+        // gate (isOnline, not isValid) passes and the respawn dispatches.
+        scheduling.runOn(player, () -> {
             if (!player.isOnline()) {
                 return;
             }
             // spigot().respawn() is the API form of the client's respawn
             // button — the same PlayerRespawnEvent path a real player takes.
             player.spigot().respawn();
-            scheduling.runGlobal(() -> {
+            scheduling.runOn(player, () -> {
                 if (player.isOnline()) {
-                    player.teleport(deathSpot);
+                    teleport(player, deathSpot);
                     player.setHealth(maxHealth(player));
                 }
-            });
-        });
+            }, () -> {});
+        }, () -> {});
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
@@ -106,6 +108,18 @@ public final class SurvivalGuards implements Listener {
                 player.setSaturation(20.0f);
             }
         }, () -> {});
+    }
+
+    /**
+     * Synchronous teleport on classic servers; the async form on Folia, where
+     * a region thread rejects {@code teleport} with "must use teleportAsync".
+     */
+    private static void teleport(Player player, Location to) {
+        try {
+            player.teleport(to);
+        } catch (UnsupportedOperationException foliaRegionThreading) {
+            player.teleportAsync(to);
+        }
     }
 
     @SuppressWarnings("deprecation") // GENERIC_MAX_HEALTH rename across the range
