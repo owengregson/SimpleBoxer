@@ -47,12 +47,14 @@ public final class NmsBridge {
 
     private final JavaPlugin plugin;
     private final ReflectionRemapper remapper;
+    private final PacketEventsCompat packetEvents;
     private final Map<String, Class<?>> classCache = new ConcurrentHashMap<>();
     private final Map<String, Method> methodCache = new ConcurrentHashMap<>();
 
     public NmsBridge(@NotNull JavaPlugin plugin) {
         this.plugin = plugin;
         this.remapper = createRemapper(plugin);
+        this.packetEvents = new PacketEventsCompat(plugin.getLogger());
     }
 
     /** A boxer's skin: the Mojang textures property value + signature. */
@@ -81,7 +83,7 @@ public final class NmsBridge {
         Object gameProfile = createGameProfile(uuid, name, skin);
 
         Object serverPlayer = createServerPlayer(minecraftServer, worldServer, gameProfile);
-        Object connection = setupConnection(minecraftServer, serverPlayer, packetSink);
+        Object connection = setupConnection(minecraftServer, serverPlayer, packetSink, uuid);
         setGameModeSurvival(serverPlayer);
         setPosition(serverPlayer, location);
 
@@ -130,6 +132,11 @@ public final class NmsBridge {
     /** Must run on the global/main thread. Idempotent against re-removal. */
     public void remove(@NotNull SpawnedPlayer spawned, @NotNull String quitMessage) {
         Player player = spawned.player();
+        try {
+            packetEvents.forgetFakeChannel(player.getUniqueId());
+        } catch (Throwable ignored) {
+            // Best-effort cleanup of the PacketEvents channel map.
+        }
         try {
             player.kickPlayer(quitMessage);
         } catch (Throwable ignored) {
@@ -567,7 +574,7 @@ public final class NmsBridge {
     }
 
     private Object setupConnection(Object minecraftServer, Object serverPlayer,
-            Consumer<CapturedPacket> packetSink) throws ReflectiveOperationException {
+            Consumer<CapturedPacket> packetSink, UUID uuid) throws ReflectiveOperationException {
         Class<?> connectionClass = nmsClass("net.minecraft.network.Connection");
         Class<?> packetFlowClass = nmsClass("net.minecraft.network.protocol.PacketFlow");
 
@@ -583,6 +590,11 @@ public final class NmsBridge {
         if (channel.pipeline().get("encoder") == null) {
             channel.pipeline().addLast("encoder", new ChannelOutboundHandlerAdapter());
         }
+
+        // Tell PacketEvents this channel is a known fake BEFORE the join fires,
+        // so its join-time injector recognises and skips the boxer instead of
+        // kicking it ("PacketEvents failed to inject into a channel").
+        packetEvents.markFakeChannel(uuid, channel);
 
         setField(connectionClass, connection, "channel", channel);
         setField(connectionClass, connection, "address", new InetSocketAddress("127.0.0.1", 9999));

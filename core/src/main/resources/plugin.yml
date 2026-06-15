@@ -10,8 +10,10 @@ description: Virtual sparring players — player-identical bots with configurabl
 authors: [owengregson]
 website: https://github.com/owengregson/SimpleBoxer
 # Load after the combat stack so its knockback/hit-speed shaping is already
-# live when boot-time boxers spawn; runtime spawns never care.
-softdepend: [Mental, OldCombatMechanics]
+# live when boot-time boxers spawn; runtime spawns never care. PacketEvents is
+# listed so its classes are visible to us (the boxer registers its fake channel
+# with PacketEvents to avoid being kicked) and so it initialises first.
+softdepend: [Mental, OldCombatMechanics, PacketEvents]
 
 commands:
   boxer:
