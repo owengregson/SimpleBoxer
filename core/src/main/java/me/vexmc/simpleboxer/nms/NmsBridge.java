@@ -582,7 +582,10 @@ public final class NmsBridge {
                 remapField(packetFlowClass, "SERVERBOUND"), "SERVERBOUND");
         Object connection = connectionClass.getConstructor(packetFlowClass).newInstance(packetFlow);
 
-        EmbeddedChannel channel = new EmbeddedChannel(new ChannelInboundHandlerAdapter());
+        // A FakeChannel (an EmbeddedChannel whose simple name every PacketEvents
+        // version recognises as fake — see FakeChannel) rather than a plain
+        // EmbeddedChannel, which older shaded copies (e.g. Grim's) do not skip.
+        EmbeddedChannel channel = new FakeChannel(new ChannelInboundHandlerAdapter());
         channel.pipeline().addFirst("simpleboxer-capture", new OutboundCapture(packetSink));
         if (channel.pipeline().get("decoder") == null) {
             channel.pipeline().addLast("decoder", new ChannelInboundHandlerAdapter());
