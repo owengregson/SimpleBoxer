@@ -33,4 +33,11 @@ public sealed interface Inbound {
 
     /** {@code ClientboundExplodePacket} — knockback ADDS to client motion. */
     record Explosion(double kx, double ky, double kz) implements Inbound {}
+
+    /**
+     * {@code ClientboundKeepAlivePacket} — the server's liveness probe. A real
+     * client echoes the id straight back; a clientless boxer that never answers
+     * is disconnected ("kicked due to keepalive timeout").
+     */
+    record KeepAlive(long id) implements Inbound {}
 }

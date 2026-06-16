@@ -51,6 +51,15 @@ final class BoxerImpl implements Boxer {
     private final BukkitCollisionView collisionView;
     private final ClientPhysics physics;
     private final AimSpring aim;
+    /** True where the server entity-ticks the boxer for us (Folia regions). */
+    private final boolean serverTicksEntity;
+    /**
+     * True where knockback is captured from Paper's EntityKnockbackEvent (full,
+     * at apply time) instead of polled from {@code hurtMarked} after the tick.
+     * The poll races the region's own doTick on Folia and loses its horizontal
+     * component to ground friction — the boxer "pops up" with no push.
+     */
+    private final boolean eventBasedKnockback;
 
     /** Clientbound packets, fed cross-thread by the capture handler. */
     private final LatencyLine<CapturedPacket> outbound = new LatencyLine<>();
@@ -60,6 +69,8 @@ final class BoxerImpl implements Boxer {
     private final LatencyLine<TargetView> perception = new LatencyLine<>();
     /** Own attributes/effects aging in like UpdateAttributes packets would. */
     private final LatencyLine<PlayerTraits.Traits> traits = new LatencyLine<>();
+    /** Server-applied knockback (EntityKnockbackEvent), aged like a velocity packet. */
+    private final LatencyLine<Vec3d> receivedKnockback = new LatencyLine<>();
 
     private final ClickScheduler clicker;
 
@@ -82,12 +93,32 @@ final class BoxerImpl implements Boxer {
     private double strafeSign = 1.0;
     private int strafeFlipIn;
 
+    /* Consecutive ticks the target has stood above an auto-step. A single jump
+     * keeps an opponent ~8 ticks above us; only a sustained rise is terrain. */
+    private int climbTicks;
+    private static final int CLIMB_SUSTAIN_TICKS = 10;
+
     private double lastSentX;
     private double lastSentY;
     private double lastSentZ;
     private float lastSentYaw;
     private float lastSentPitch;
     private int idleMoveTicks;
+
+    /**
+     * Where our packets last left the boxer's server position. On a server that
+     * entity-ticks the boxer for us, the region's own doTick travels the body by
+     * gravity/knockback between our ticks; we re-anchor to this each tick so the
+     * server position follows ONLY our move packets, as a real client's does.
+     * A change larger than {@link #TELEPORT_RESYNC_SQ} is a real reposition
+     * (teleport, respawn) and is adopted instead of undone.
+     */
+    private boolean hasAnchor;
+    private double anchorX;
+    private double anchorY;
+    private double anchorZ;
+    /** Squared distance past which a server-position change is a teleport, not doTick drift. */
+    private static final double TELEPORT_RESYNC_SQ = 16.0;
 
     private sealed interface Action {
         record Move(double x, double y, double z, float yaw, float pitch,
@@ -104,6 +135,8 @@ final class BoxerImpl implements Boxer {
         record Attack(@NotNull Player victim) implements Action {}
 
         record Swing() implements Action {}
+
+        record KeepAlive(long id) implements Action {}
     }
 
     private boolean serverSprinting;
@@ -121,6 +154,8 @@ final class BoxerImpl implements Boxer {
             @NotNull PacketIO packetIO,
             @NotNull NmsBridge.SpawnedPlayer spawned,
             @NotNull Location spawnLocation,
+            boolean serverTicksEntity,
+            boolean eventBasedKnockback,
             @NotNull Logger logger) {
         this.name = name;
         this.uuid = uuid;
@@ -129,6 +164,8 @@ final class BoxerImpl implements Boxer {
         this.bridge = bridge;
         this.packetIO = packetIO;
         this.spawned = spawned;
+        this.serverTicksEntity = serverTicksEntity;
+        this.eventBasedKnockback = eventBasedKnockback;
         this.logger = logger;
         this.collisionView = new BukkitCollisionView(spawnLocation.getWorld());
         this.physics = new ClientPhysics(
@@ -150,6 +187,15 @@ final class BoxerImpl implements Boxer {
         outbound.offer(packet, packet.nanos());
     }
 
+    /**
+     * The boxer's owning thread, from {@code EntityKnockbackEvent}: the full
+     * post-knockback velocity the server computed, before its own tick can decay
+     * it. Aged through the perception line and applied like a velocity packet.
+     */
+    void onKnockback(double vx, double vy, double vz) {
+        receivedKnockback.offer(new Vec3d(vx, vy, vz), System.nanoTime());
+    }
+
     /* ------------------------------------------------------------------ */
     /*  The brain tick (owning thread)                                     */
     /* ------------------------------------------------------------------ */
@@ -159,6 +205,14 @@ final class BoxerImpl implements Boxer {
             return;
         }
         refreshHandleAfterRespawn();
+        // Where the server entity-ticks the boxer for us, the region's own
+        // doTick has travelled the body (gravity, residual knockback) since our
+        // last tick. Undo that drift up front so the server position follows
+        // ONLY our move packets — but adopt a large change, which is a real
+        // server-driven reposition (a teleport or respawn), not tick drift.
+        if (serverTicksEntity && hasAnchor) {
+            reanchorServerPosition();
+        }
         long now = System.nanoTime();
         long oneWay = TimeUnit.MILLISECONDS.toNanos(settings.pingMs()) / 2;
 
@@ -168,6 +222,12 @@ final class BoxerImpl implements Boxer {
             for (Inbound inbound : packetIO.recognize(captured.packet())) {
                 route(inbound, now);
             }
+        }
+        // Knockback the server applied to us, captured at full strength from
+        // EntityKnockbackEvent and aged like the velocity packet a real client
+        // would receive. REPLACES motion, exactly as a velocity packet does.
+        for (Vec3d knockback : receivedKnockback.drain(now, oneWay)) {
+            physics.applyVelocity(knockback.x(), knockback.y(), knockback.z());
         }
         snapshotTarget(now);
         TargetView matured = perception.drainLatest(now, oneWay);
@@ -210,34 +270,75 @@ final class BoxerImpl implements Boxer {
             dispatch(action);
         }
 
-        // 5. Ship the boxer's own pending knockback BEFORE the tick:
-        //    doTick's travel drags the server motion fields, and a packet
-        //    synthesized after it would carry a once-decayed stamp.
-        Object selfVelocity = bridge.drainHurtMarked(spawned.serverPlayer(), spawned.player());
-        if (selfVelocity != null) {
-            onOutboundPacket(new CapturedPacket(System.nanoTime(), selfVelocity));
-        }
-
-        // 6. Tick the ServerPlayer (timers, effects, food — the server
-        //    half of being a player). On older versions doTick ALSO runs
-        //    the entity's own travel, displacing the boxer by its server
-        //    motion fields — real players never show this because their
-        //    clients stream absolute positions every tick that overwrite
-        //    it. The boxer's server position must follow ONLY its move
-        //    packets and teleports, so any doTick displacement is undone.
-        Location preTick = spawned.player().getLocation();
-        bridge.tick(spawned.serverPlayer());
-        Location postTick = spawned.player().getLocation();
-        if (postTick.getX() != preTick.getX() || postTick.getY() != preTick.getY()
-                || postTick.getZ() != preTick.getZ()) {
-            try {
-                bridge.setPosition(spawned.serverPlayer(),
-                        preTick.getX(), preTick.getY(), preTick.getZ());
-            } catch (ReflectiveOperationException failure) {
-                logger.warning("[" + name + "] position restore failed: " + failure);
+        // 5. Ship the boxer's own pending knockback BEFORE the tick: doTick's
+        //    travel drags the server motion fields, and a packet synthesized
+        //    after it would carry a once-decayed stamp. Skipped where knockback
+        //    is captured from EntityKnockbackEvent instead (it can't win this
+        //    poll against the region's own tick), and there the live tracker is
+        //    left to broadcast the velocity to viewers itself.
+        if (!eventBasedKnockback) {
+            Object selfVelocity = bridge.drainHurtMarked(spawned.serverPlayer(), spawned.player());
+            if (selfVelocity != null) {
+                onOutboundPacket(new CapturedPacket(System.nanoTime(), selfVelocity));
             }
         }
 
+        // 6. Tick the ServerPlayer (timers, effects, food — the server half of
+        //    being a player), but ONLY where the server will not do it itself.
+        //    doTick also runs the entity's own travel, displacing the boxer by
+        //    its server motion fields — real players never show this because
+        //    their clients stream absolute positions every tick that overwrite
+        //    it. The boxer's server position must follow ONLY its move packets,
+        //    so any doTick displacement is undone.
+        if (serverTicksEntity) {
+            // The owning region already ticked (or will tick) this entity this
+            // server tick. A second doTick here would double every timer (attack
+            // cooldown, effects, food) and re-travel the body. Just record where
+            // our move packets left the server position; next tick re-anchors to
+            // it, undoing the region's intervening travel.
+            Location anchor = spawned.player().getLocation();
+            anchorX = anchor.getX();
+            anchorY = anchor.getY();
+            anchorZ = anchor.getZ();
+            hasAnchor = true;
+        } else {
+            Location preTick = spawned.player().getLocation();
+            bridge.tick(spawned.serverPlayer());
+            Location postTick = spawned.player().getLocation();
+            if (postTick.getX() != preTick.getX() || postTick.getY() != preTick.getY()
+                    || postTick.getZ() != preTick.getZ()) {
+                try {
+                    bridge.setPosition(spawned.serverPlayer(),
+                            preTick.getX(), preTick.getY(), preTick.getZ());
+                } catch (ReflectiveOperationException failure) {
+                    logger.warning("[" + name + "] position restore failed: " + failure);
+                }
+            }
+        }
+    }
+
+    /**
+     * Undo the owning region's between-tick doTick travel by snapping the server
+     * position back to where our packets last left it — unless it has moved
+     * farther than a teleport threshold, which means the server itself
+     * repositioned the boxer (a teleport or respawn) and we adopt that instead.
+     */
+    private void reanchorServerPosition() {
+        Location current = spawned.player().getLocation();
+        double dx = current.getX() - anchorX;
+        double dy = current.getY() - anchorY;
+        double dz = current.getZ() - anchorZ;
+        if (dx * dx + dy * dy + dz * dz > TELEPORT_RESYNC_SQ) {
+            return; // a real server reposition — let it stand; the new anchor is recorded this tick
+        }
+        if (dx == 0.0 && dy == 0.0 && dz == 0.0) {
+            return;
+        }
+        try {
+            bridge.setPosition(spawned.serverPlayer(), anchorX, anchorY, anchorZ);
+        } catch (ReflectiveOperationException failure) {
+            logger.warning("[" + name + "] position re-anchor failed: " + failure);
+        }
     }
 
     /**
@@ -287,7 +388,10 @@ final class BoxerImpl implements Boxer {
 
     private void route(@NotNull Inbound inbound, long now) {
         if (inbound instanceof Inbound.Velocity velocity) {
-            if (velocity.entityId() == spawned.entityId()) {
+            if (velocity.entityId() == spawned.entityId() && !eventBasedKnockback) {
+                // When EntityKnockbackEvent owns our knockback, ignore the
+                // tracker's own SetEntityMotion echo for us — it carries the
+                // once-decayed value that would override the full one.
                 if (DEBUG) {
                     logger.info("[debug " + name + "] velocity applied (" + velocity.vx()
                             + "," + velocity.vy() + "," + velocity.vz() + ") emuZ=" + physics.z());
@@ -298,6 +402,13 @@ final class BoxerImpl implements Boxer {
         }
         if (inbound instanceof Inbound.Explosion explosion) {
             physics.addVelocity(explosion.kx(), explosion.ky(), explosion.kz());
+            return;
+        }
+        if (inbound instanceof Inbound.KeepAlive keepAlive) {
+            // Echo it back through the action line — a real client answers a
+            // tick or so later (its own ping), and the server only needs the
+            // reply before the next probe ~15 s out.
+            actions.offer(new Action.KeepAlive(keepAlive.id()), now);
             return;
         }
         if (inbound instanceof Inbound.PositionSync sync) {
@@ -339,6 +450,7 @@ final class BoxerImpl implements Boxer {
     private @NotNull MoveInput decideInput() {
         TargetView view = perceived;
         if (view == null) {
+            climbTicks = 0;
             syncSprint(false);
             return MoveInput.IDLE;
         }
@@ -376,6 +488,19 @@ final class BoxerImpl implements Boxer {
         }
 
         double strafe = strafeInput(movement, distance);
+        // Follow the target up terrain. When it has stood more than an auto-step
+        // (STEP_HEIGHT) above us for long enough to be terrain rather than a
+        // jump, keep advancing into the rise instead of holding range, and hop
+        // (below) while still closing so running momentum carries us over the
+        // lip. Without this the boxer halts at the foot of a block it could have
+        // hopped; gating on a SUSTAINED rise keeps it from lurching every time
+        // the target merely jumps in flat-ground combat.
+        if (view.y() - physics.y() > ClientPhysics.STEP_HEIGHT) {
+            climbTicks++;
+        } else {
+            climbTicks = 0;
+        }
+        boolean climbing = climbTicks >= CLIMB_SUSTAIN_TICKS;
         // The default ring is 0: the forward key NEVER releases — easing
         // off in the pocket drops sprint (vanilla needs impulse ≥ 0.8) and
         // the momentum that survives combos. Entity pushing resolves the
@@ -384,7 +509,7 @@ final class BoxerImpl implements Boxer {
         // when overlapped.
         boolean inRange = distance <= movement.stopDistance();
         double forward;
-        if (inRange) {
+        if (inRange && !climbing) {
             forward = distance < movement.stopDistance() - 0.8 ? -0.4 : 0.0;
         } else {
             forward = 1.0;
@@ -392,8 +517,14 @@ final class BoxerImpl implements Boxer {
 
         boolean sprinting = movement.sprint() && forward > 0.9;
         syncSprint(sprinting);
-        // Jump single-block steps the collision could not solve.
-        boolean jump = physics.onGround() && physics.horizontalCollision();
+        // Jump to clear terrain. Hopping only once already blocked fails: the
+        // collision has zeroed our horizontal velocity, so we rise straight up
+        // against the step face and drop back down in place. Instead we hop
+        // while still CLOSING on a target above us — leaving the ground with
+        // running momentum intact is what arcs us forward over the block, the
+        // way a player bunny-hops up stairs. The blocked case stays a fallback
+        // for steps met head-on at our own level.
+        boolean jump = physics.onGround() && (physics.horizontalCollision() || climbing);
         return new MoveInput(forward, strafe, jump, sprinting, false);
     }
 
@@ -638,6 +769,11 @@ final class BoxerImpl implements Boxer {
                 }
             } else if (action instanceof Action.Swing) {
                 packetIO.dispatch(packetIO.swing(), spawned.gameListener());
+            } else if (action instanceof Action.KeepAlive keepAlive) {
+                Object response = packetIO.keepAliveResponse(keepAlive.id());
+                if (response != null) {
+                    packetIO.dispatch(response, spawned.gameListener());
+                }
             }
         } catch (Throwable failure) {
             logger.warning("[" + name + "] action dispatch failed: " + failure);

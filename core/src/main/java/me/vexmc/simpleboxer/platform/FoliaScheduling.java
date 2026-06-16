@@ -131,6 +131,13 @@ public final class FoliaScheduling implements Scheduling {
         return owned instanceof Boolean value && value;
     }
 
+    @Override
+    public boolean autoTicksEntities() {
+        // Every placed entity is ticked by its owning region; the brain must not
+        // also tick the boxer, or its doTick would run twice per server tick.
+        return true;
+    }
+
     /* ------------------------------------------------------------------ */
     /*  Entity-owned                                                       */
     /* ------------------------------------------------------------------ */

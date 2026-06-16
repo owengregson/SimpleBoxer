@@ -45,6 +45,12 @@ public final class BoxerManager implements BoxerService {
     private final PacketIO packetIO;
     private final SkinService skins;
     private final TabConcealer tabConcealer;
+    /**
+     * Capture knockback from EntityKnockbackEvent rather than polling — only
+     * where the server entity-ticks the boxer (Folia) and the event exists. On
+     * classic servers the poll wins its race and the event path is unnecessary.
+     */
+    private final boolean eventBasedKnockback;
     private final Map<UUID, BoxerImpl> byUuid = new ConcurrentHashMap<>();
     private final Map<String, BoxerImpl> byName = new ConcurrentHashMap<>();
     private final Map<UUID, TaskHandle> tickTasks = new ConcurrentHashMap<>();
@@ -58,10 +64,17 @@ public final class BoxerManager implements BoxerService {
         this.packetIO = new PacketIO(bridge);
         this.skins = new SkinService(scheduling, plugin.getDataFolder().toPath(), plugin.getLogger());
         this.tabConcealer = new TabConcealer(bridge, plugin.getLogger());
+        this.eventBasedKnockback =
+                scheduling.autoTicksEntities() && KnockbackListener.eventAvailable();
     }
 
     public @NotNull TabConcealer tabConcealer() {
         return tabConcealer;
+    }
+
+    /** Whether boxers take knockback from EntityKnockbackEvent (vs the poll). */
+    public boolean eventBasedKnockback() {
+        return eventBasedKnockback;
     }
 
     @Override
@@ -143,7 +156,8 @@ public final class BoxerManager implements BoxerService {
                 });
 
         BoxerImpl boxer = new BoxerImpl(request.name(), uuid, request.settings(), this,
-                bridge, packetIO, spawned, request.location(), plugin.getLogger());
+                bridge, packetIO, spawned, request.location(),
+                scheduling.autoTicksEntities(), eventBasedKnockback, plugin.getLogger());
         synchronized (preSpawn) {
             preSpawn.forEach(boxer::onOutboundPacket);
             preSpawn.clear();

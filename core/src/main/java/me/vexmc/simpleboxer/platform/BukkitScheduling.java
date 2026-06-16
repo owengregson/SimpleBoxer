@@ -37,6 +37,12 @@ public final class BukkitScheduling implements Scheduling {
     }
 
     @Override
+    public boolean autoTicksEntities() {
+        // Classic servers never entity-tick a clientless boxer; the brain owns its doTick.
+        return false;
+    }
+
+    @Override
     public boolean ownsRegion(@NotNull Location location) {
         return Bukkit.isPrimaryThread();
     }

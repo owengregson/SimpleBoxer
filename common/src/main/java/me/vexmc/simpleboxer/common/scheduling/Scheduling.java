@@ -33,6 +33,18 @@ public interface Scheduling {
     boolean ownsRegion(@NotNull Location location);
 
     /**
+     * Whether the server ticks a placed player's entity (its {@code doTick} —
+     * timers, effects, motion travel) on its own every server tick. False on
+     * classic servers, where a clientless boxer is never entity-ticked and its
+     * brain must drive {@code doTick} itself; true on Folia, where the owning
+     * region ticks every placed entity, so a brain that also ticked it would
+     * double every timer and re-travel the body. Boxer brains use this to tick
+     * the {@code ServerPlayer} themselves only where the server will not, and to
+     * hold the boxer's server position against the region's own travel.
+     */
+    boolean autoTicksEntities();
+
+    /**
      * Runs on the thread that owns {@code entity}. If the entity is removed
      * before execution, {@code retired} runs instead (possibly immediately).
      */

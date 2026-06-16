@@ -61,6 +61,10 @@ public final class PacketIO {
     private @Nullable Constructor<?> inputPacketConstructor;
     private @Nullable Constructor<?> playerLoadedConstructor;
 
+    private @Nullable Class<?> keepAlivePacketClass;
+    private @Nullable Field keepAliveId;
+    private @Nullable Constructor<?> keepAliveResponseConstructor;
+
     private Class<?> motionPacketClass;
     private Field motionId;
     private Field @Nullable [] motionInts;
@@ -191,6 +195,21 @@ public final class PacketIO {
             playerLoadedConstructor = null;
         }
 
+        // KeepAlive: the server probes the connection's liveness and
+        // disconnects a peer that does not echo the id back. A clientless boxer
+        // must answer it itself. The pair moved game -> common in 1.20.2; the
+        // payload is a single long either era.
+        try {
+            keepAlivePacketClass = keepAliveClass("ClientboundKeepAlivePacket");
+            keepAliveId = singleLongField(keepAlivePacketClass);
+            keepAliveResponseConstructor =
+                    keepAliveClass("ServerboundKeepAlivePacket").getConstructor(long.class);
+        } catch (ReflectiveOperationException noKeepAlive) {
+            keepAlivePacketClass = null;
+            keepAliveId = null;
+            keepAliveResponseConstructor = null;
+        }
+
         // Clientbound shapes.
         motionPacketClass = bridge.nmsClass(
                 "net.minecraft.network.protocol.game.ClientboundSetEntityMotionPacket");
@@ -290,6 +309,25 @@ public final class PacketIO {
         throw new ClassNotFoundException(simpleName + " enum in " + owner.getName());
     }
 
+    /** KeepAlive packets live in {@code protocol.common} (1.20.2+) or {@code protocol.game} before. */
+    private Class<?> keepAliveClass(String simpleName) throws ClassNotFoundException {
+        try {
+            return bridge.nmsClass("net.minecraft.network.protocol.common." + simpleName);
+        } catch (ClassNotFoundException pre1202) {
+            return bridge.nmsClass("net.minecraft.network.protocol.game." + simpleName);
+        }
+    }
+
+    private static Field singleLongField(Class<?> owner) throws NoSuchFieldException {
+        for (Field field : owner.getDeclaredFields()) {
+            if (!Modifier.isStatic(field.getModifiers()) && field.getType() == long.class) {
+                field.setAccessible(true);
+                return field;
+            }
+        }
+        throw new NoSuchFieldException("long id on " + owner.getName());
+    }
+
     private Field fieldByName(Class<?> owner, String mojangName) throws NoSuchFieldException {
         Field field = Reflect.field(owner, bridge.remapField(owner, mojangName));
         if (field == null) {
@@ -358,6 +396,16 @@ public final class PacketIO {
 
     public @NotNull Object swing() throws ReflectiveOperationException {
         return swingConstructor.newInstance(mainHand);
+    }
+
+    /**
+     * The answer to a {@code ClientboundKeepAlivePacket}: echo the id back so
+     * the server's liveness check passes. {@code null} where the packet pair is
+     * absent (it never is on a supported server).
+     */
+    public @Nullable Object keepAliveResponse(long id) throws ReflectiveOperationException {
+        return keepAliveResponseConstructor == null
+                ? null : keepAliveResponseConstructor.newInstance(id);
     }
 
     public @NotNull Object respawn() throws ReflectiveOperationException {
@@ -451,7 +499,9 @@ public final class PacketIO {
                 }
                 return;
             }
-            if (motionPacketClass.isInstance(packet)) {
+            if (keepAlivePacketClass != null && keepAlivePacketClass.isInstance(packet)) {
+                into.add(new Inbound.KeepAlive(keepAliveId.getLong(packet)));
+            } else if (motionPacketClass.isInstance(packet)) {
                 into.add(decodeVelocity(packet));
             } else if (positionPacketClass.isInstance(packet)) {
                 Inbound.PositionSync sync = decodePosition(packet);

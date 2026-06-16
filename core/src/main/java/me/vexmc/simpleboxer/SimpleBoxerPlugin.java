@@ -3,6 +3,7 @@ package me.vexmc.simpleboxer;
 import me.vexmc.simpleboxer.api.BoxerService;
 import me.vexmc.simpleboxer.boxer.BoxerManager;
 import me.vexmc.simpleboxer.boxer.CombatFeedbackListener;
+import me.vexmc.simpleboxer.boxer.KnockbackListener;
 import me.vexmc.simpleboxer.command.BoxerCommands;
 import me.vexmc.simpleboxer.common.scheduling.Scheduling;
 import me.vexmc.simpleboxer.config.ConfigStore;
@@ -65,6 +66,12 @@ public final class SimpleBoxerPlugin extends JavaPlugin {
                 new BoxerJoinListener(boxerManager, boxerManager.tabConcealer(), scheduling), this);
         getServer().getPluginManager().registerEvents(
                 new CombatFeedbackListener(boxerManager), this);
+        // Where the region entity-ticks boxers (Folia), capture their knockback
+        // from EntityKnockbackEvent — the poll loses its horizontal component to
+        // the region's own tick (the boxer "pops up" with no push).
+        if (boxerManager.eventBasedKnockback()) {
+            new KnockbackListener(boxerManager, getLogger()).register(this);
+        }
         getLogger().info("SimpleBoxer " + getDescription().getVersion()
                 + " enabled (scheduling: " + scheduling.describe() + ").");
     }
