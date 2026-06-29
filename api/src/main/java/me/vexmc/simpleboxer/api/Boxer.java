@@ -31,6 +31,18 @@ public interface Boxer {
     /** Sets (or clears) the player this boxer follows and attacks. */
     void setTarget(@Nullable Player target);
 
+    /** The boxer's currently equipped kit (its virtual inventory). */
+    @NotNull Loadout loadout();
+
+    /**
+     * Equips a kit onto the boxer's real {@link Player#getInventory() inventory}
+     * — armor pieces and both hands. Vanilla and custom-enchant effects apply
+     * exactly as they would to a player wearing the same items. Takes effect on
+     * the boxer's owning thread (next brain tick); re-applied automatically
+     * after a respawn so the kit is never lost.
+     */
+    void equip(@NotNull Loadout loadout);
+
     boolean paused();
 
     /** Freezes the brain: no movement, no aim, no clicks — packets still flow. */

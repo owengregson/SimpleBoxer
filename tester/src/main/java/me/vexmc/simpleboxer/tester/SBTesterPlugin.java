@@ -9,6 +9,7 @@ import me.vexmc.simpleboxer.tester.suite.BootSuite;
 import me.vexmc.simpleboxer.tester.suite.CombatSuite;
 import me.vexmc.simpleboxer.tester.suite.CommandSuite;
 import me.vexmc.simpleboxer.tester.suite.GuardSuite;
+import me.vexmc.simpleboxer.tester.suite.InventorySuite;
 import me.vexmc.simpleboxer.tester.suite.LatencySuite;
 import me.vexmc.simpleboxer.tester.suite.MovementSuite;
 import me.vexmc.simpleboxer.tester.suite.SpawnSuite;
@@ -67,6 +68,7 @@ public final class SBTesterPlugin extends JavaPlugin {
             suite.addAll(CombatSuite.tests(this));
             suite.addAll(GuardSuite.tests());
             suite.addAll(LatencySuite.tests());
+            suite.addAll(InventorySuite.tests(simpleBoxer));
             suite.addAll(CommandSuite.tests(simpleBoxer));
             new TestHarness(this, scheduling).run(suite);
         });

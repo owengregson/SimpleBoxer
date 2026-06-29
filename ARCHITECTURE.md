@@ -103,8 +103,8 @@ harness) rather than asserted in-process.
 | Module   | Contents | Deps |
 | --- | --- | --- |
 | `common` | Pure logic, no plugin lifecycle: `ClientPhysics` (the client motion integrator), `AimSpring`, `ClickScheduler`, `LatencyLine`, settings records + presets + parsing, `Scheduling` seam | paper-api (compileOnly) |
-| `api`    | Public surface other plugins consume: `Boxer`, `BoxerService`, `BoxerBehavior`, Bukkit events | `common` |
-| `core`   | The plugin: NMS bridge (spawn/connection/packets), identity (skins/tab), guards, the brain, behaviors, commands, config | `api`, `common`, reflection-remapper (shaded) |
+| `api`    | Public surface other plugins consume: `Boxer`, `BoxerService`, `Loadout`, Bukkit events | `common` |
+| `core`   | The plugin: NMS bridge (spawn/connection/packets), identity (skins/tab), guards, the brain, behaviors, the GUI, commands, config | `api`, `common`, reflection-remapper (shaded) |
 | `tester` | In-server integration suite (Mental's TestHarness pattern), runs per-version via run-paper; detects Mental/OCM and adds coexistence suites | `core` (compileOnly) |
 
 ## The brain (per tick, on the boxer's owning thread)
@@ -186,6 +186,40 @@ world snapshot ──► PerceptionLine (delay = ping/2) ──► Behavior (int
 - **Difficulty presets** bundle ping, CPS, aim params, reach discipline,
   w-tap usage/delay, and strafe style into named tiers; every component
   stays individually overridable per boxer at spawn or at runtime.
+
+## The GUI and virtual inventories
+
+The plugin is GUI-first: `/boxer` opens an in-game menu that fronts the whole
+feature set (spawn, manage, tune, kit, presets, config). The command tree is
+unchanged underneath — it stays for console and the integration suite — but a
+player never needs it.
+
+- **Framework** (`gui`): a `Menu` is its own `InventoryHolder`, so the single
+  `MenuListener` routes events by `getHolder() instanceof Menu` and a foreign
+  GUI is never mistaken for ours. The contract is "cancel every click and drag,
+  then opt back in" through `Button`s and a couple of override hooks — a menu
+  never lets Bukkit move a real item. `Icon` builds icons against the
+  cross-version common denominator (legacy §-string display API, the two
+  stable item flags, a glow enchant resolved by registry KEY since the
+  constants were renamed in the 1.20.5 alignment). `ChatPrompts` captures the
+  one thing a grid of icons can't express — free text — over the legacy
+  `AsyncPlayerChatEvent` that every supported version still fires.
+- **Virtual inventory** (`api.Loadout` + `BoxerImpl`): a `Loadout` is six
+  immutable, defensively-cloned equipment slots (four armor pieces, both
+  hands). `equip()` publishes it from any thread and sets a dirty flag; the
+  brain applies it to the real `EntityEquipment` on the boxer's **owning
+  thread** in `tick()`, so equipment writes — and the `PlayerArmorChangeEvent`
+  they fire, which custom-enchant plugins key passive effects off — never race
+  the brain or a Folia region tick. Because the boxer is a real `ServerPlayer`,
+  the kit is vanilla-real: armor and weapon attributes register, vanilla and
+  custom enchants apply, and the loadout editor (`LoadoutMenu`) is dupe-safe by
+  construction — it copies items into a model and never consumes the operator's
+  own. The kit re-applies after a respawn (the entity is replaced; the dirty
+  flag re-arms on the handle swap) so it is never lost.
+- **Persistence** (`BoxerSettingsWriter` + `ConfigStore`): the GUI's
+  defaults/preset edits serialise back through the exact inverse of the parser
+  (`parse(write(s)) == s`, pinned by test) and save to `config.yml`. Live-boxer
+  edits retune in place and persist nothing — boxers stay ephemeral.
 
 ## Threading
 

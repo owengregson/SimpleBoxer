@@ -11,6 +11,7 @@ import me.vexmc.simpleboxer.common.aim.AimParams;
 import me.vexmc.simpleboxer.common.settings.BoxerSettings;
 import me.vexmc.simpleboxer.common.settings.BoxerSettingsParser;
 import me.vexmc.simpleboxer.config.ConfigStore;
+import me.vexmc.simpleboxer.gui.Gui;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.command.Command;
@@ -21,33 +22,46 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 /**
- * The /boxer tree. Op-gated per subtree by plugin.yml permissions; every
- * subcommand answers in plain prose and never throws at the sender.
+ * The /boxer tree. The plugin is GUI-first — bare {@code /boxer} (and
+ * {@code /boxer menu}) opens the menu for a player — but the full command tree
+ * stays for console, scripting and the integration suite. Op-gated per subtree
+ * by plugin.yml permissions; every subcommand answers in plain prose and never
+ * throws at the sender.
  */
 public final class BoxerCommands implements TabExecutor {
 
     private static final List<String> SUBCOMMANDS = List.of(
-            "spawn", "remove", "list", "target", "pause", "resume", "set", "info", "reload");
+            "menu", "spawn", "remove", "list", "target", "pause", "resume", "set", "info", "reload");
     private static final List<String> SET_KEYS = List.of(
             "ping", "cps", "reach", "aim", "wtap", "preset", "movement", "invincible");
 
     private final BoxerManager manager;
     private final ConfigStore config;
+    private final Gui gui;
 
-    public BoxerCommands(@NotNull BoxerManager manager, @NotNull ConfigStore config) {
+    public BoxerCommands(@NotNull BoxerManager manager, @NotNull ConfigStore config,
+            @NotNull Gui gui) {
         this.manager = manager;
         this.config = config;
+        this.gui = gui;
     }
 
     @Override
     public boolean onCommand(@NotNull CommandSender sender, @NotNull Command command,
             @NotNull String label, String @NotNull [] args) {
         if (args.length == 0) {
-            help(sender, label);
+            // Front door: a player gets the GUI; the console gets the help text
+            // (it cannot open an inventory).
+            if (sender instanceof Player player && player.hasPermission("simpleboxer.gui")) {
+                gui.openMain(player);
+            } else {
+                help(sender, label);
+            }
             return true;
         }
         String sub = args[0].toLowerCase(Locale.ROOT);
         switch (sub) {
+            case "menu", "gui" -> openMenu(sender);
             case "spawn" -> spawn(sender, args);
             case "remove" -> remove(sender, args);
             case "list" -> list(sender);
@@ -62,8 +76,22 @@ public final class BoxerCommands implements TabExecutor {
         return true;
     }
 
+    private void openMenu(CommandSender sender) {
+        if (!(sender instanceof Player player)) {
+            sender.sendMessage("§cThe menu is in-game only — use the subcommands from console.");
+            return;
+        }
+        if (!player.hasPermission("simpleboxer.gui")) {
+            player.sendMessage("§cYou lack simpleboxer.gui.");
+            return;
+        }
+        gui.openMain(player);
+    }
+
     private void help(CommandSender sender, String label) {
         sender.sendMessage("§6SimpleBoxer §7— virtual sparring players");
+        sender.sendMessage("§e/" + label + " §7— open the menu (spawn, tune, kit, everything)");
+        sender.sendMessage("§7Or drive it from the console / scripts:");
         sender.sendMessage("§e/" + label + " spawn <name> [preset] [skin:<player>] [target:<player>] [at <x> <y> <z>]");
         sender.sendMessage("§e/" + label + " remove <name|all> §7• §e list §7• §e info <name>");
         sender.sendMessage("§e/" + label + " target <name> <player|none> §7• §e pause|resume <name|all>");

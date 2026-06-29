@@ -6,6 +6,12 @@
 #  tunes the brain driving them. Every key inherits sensible defaults when
 #  omitted; malformed values warn in the console and keep the inherited
 #  value — a typo can never break a spawn.
+#
+#  You rarely need to edit this by hand: run /boxer in game and the menu
+#  edits these defaults and presets for you (saved straight back here).
+#  Hand-editing still works — run /boxer reload (or use the menu) afterwards.
+#  (On servers older than 1.18.1, the first menu-driven save rewrites this
+#  file without these comments — your settings are kept, the notes are not.)
 # ──────────────────────────────────────────────────────────────────────────
 
 # Keep boxers out of the tab list (they stay tab-completable in commands —

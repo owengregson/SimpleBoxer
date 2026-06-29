@@ -155,8 +155,8 @@ public final class BoxerManager implements BoxerService {
                     }
                 });
 
-        BoxerImpl boxer = new BoxerImpl(request.name(), uuid, request.settings(), this,
-                bridge, packetIO, spawned, request.location(),
+        BoxerImpl boxer = new BoxerImpl(request.name(), uuid, request.settings(),
+                request.loadout(), this, bridge, packetIO, spawned, request.location(),
                 scheduling.autoTicksEntities(), eventBasedKnockback, plugin.getLogger());
         synchronized (preSpawn) {
             preSpawn.forEach(boxer::onOutboundPacket);

@@ -6,6 +6,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.logging.Logger;
 import me.vexmc.simpleboxer.api.Boxer;
+import me.vexmc.simpleboxer.api.Loadout;
 import me.vexmc.simpleboxer.common.aim.AimSpring;
 import me.vexmc.simpleboxer.common.combat.ClickScheduler;
 import me.vexmc.simpleboxer.common.latency.LatencyLine;
@@ -79,6 +80,16 @@ final class BoxerImpl implements Boxer {
     private volatile boolean paused;
     private final AtomicBoolean removed = new AtomicBoolean(false);
 
+    /**
+     * The boxer's worn kit. Published from any thread (API/GUI); applied to the
+     * real {@code EntityEquipment} on the owning thread when {@code loadoutDirty}
+     * is set, so equipment writes never race the brain or a Folia region tick.
+     */
+    private volatile Loadout loadout;
+    private volatile boolean loadoutDirty;
+    /** Set by {@link #retune}; the owning thread re-tunes the aim/click state. */
+    private volatile boolean settingsDirty;
+
     /** What the boxer believes about its target — one perception-delay old. */
     private record TargetView(double x, double y, double z, double eyeY,
             @NotNull Player entity) {}
@@ -149,6 +160,7 @@ final class BoxerImpl implements Boxer {
             @NotNull String name,
             @NotNull UUID uuid,
             @NotNull BoxerSettings settings,
+            @NotNull Loadout loadout,
             @NotNull BoxerManager manager,
             @NotNull NmsBridge bridge,
             @NotNull PacketIO packetIO,
@@ -160,6 +172,10 @@ final class BoxerImpl implements Boxer {
         this.name = name;
         this.uuid = uuid;
         this.settings = settings;
+        this.loadout = loadout;
+        // A non-empty starting kit is applied on the first brain tick (owning
+        // thread), the same path runtime re-equips and respawn re-applies take.
+        this.loadoutDirty = !loadout.isEmpty();
         this.manager = manager;
         this.bridge = bridge;
         this.packetIO = packetIO;
@@ -205,6 +221,26 @@ final class BoxerImpl implements Boxer {
             return;
         }
         refreshHandleAfterRespawn();
+        // Apply freshly published settings on the owning thread — the brain's
+        // aim spring and click clock are plain stateful objects this tick reads,
+        // so retune() only publishes the volatile snapshot and the actual
+        // mutation happens HERE, never racing a GUI thread on Folia.
+        if (settingsDirty) {
+            settingsDirty = false;
+            aim.retune(settings.aim());
+            clicker.retune(settings.cps(), settings.clickJitter());
+        }
+        // Apply a freshly published kit on the owning thread — equipment writes
+        // (and the PlayerArmorChangeEvent they fire, which custom-enchant
+        // plugins listen for) must never race the brain or a region tick. Clear
+        // the flag before applying (the latest volatile loadout is what lands);
+        // a transient write failure re-arms it so the next tick retries.
+        if (loadoutDirty) {
+            loadoutDirty = false;
+            if (!applyLoadout()) {
+                loadoutDirty = true;
+            }
+        }
         // Where the server entity-ticks the boxer for us, the region's own
         // doTick has travelled the body (gravity, residual knockback) since our
         // last tick. Undo that drift up front so the server position follows
@@ -367,6 +403,13 @@ final class BoxerImpl implements Boxer {
                 // and attacks would be silently dropped.
                 declareClientLoaded();
                 lastQueuedInput = null; // re-state the keyboard to the new listener
+                // Respawn keeps the inventory (the death intercept sets
+                // keepInventory), but the entity is replaced — re-stamp the kit
+                // so the equipment, and the armor-change events custom enchants
+                // watch, are unmistakably present on the fresh handle.
+                if (!loadout.isEmpty()) {
+                    loadoutDirty = true;
+                }
             }
         } catch (Throwable unresolved) {
             // Keep the old handle; the next tick retries.
@@ -806,9 +849,10 @@ final class BoxerImpl implements Boxer {
 
     @Override
     public void retune(@NotNull BoxerSettings newSettings) {
+        // Publish only — the aim spring and click clock are mutated on the
+        // owning thread in tick() (settingsDirty), never from a GUI thread.
         this.settings = newSettings;
-        this.aim.retune(newSettings.aim());
-        this.clicker.retune(newSettings.cps(), newSettings.clickJitter());
+        this.settingsDirty = true;
     }
 
     @Override
@@ -819,6 +863,65 @@ final class BoxerImpl implements Boxer {
     @Override
     public void setTarget(@Nullable Player newTarget) {
         this.target = newTarget;
+    }
+
+    @Override
+    public @NotNull Loadout loadout() {
+        return loadout;
+    }
+
+    @Override
+    public void equip(@NotNull Loadout newLoadout) {
+        this.loadout = newLoadout;
+        this.loadoutDirty = true;
+    }
+
+    /**
+     * Writes the kit onto the boxer's real equipment — the owning thread only
+     * (called from {@link #tick()}). Setting through the Bukkit inventory is
+     * what makes the gear vanilla-real: armor and weapon attributes register on
+     * the {@code ServerPlayer}, the change broadcasts to viewers through the
+     * entity tracker, and {@code PlayerArmorChangeEvent} fires for the
+     * custom-enchant plugins that key passive effects off equipped armor.
+     *
+     * <p>The equipped copies are stamped Unbreakable: an invincible boxer fights
+     * forever, and durability is never cancelled by the survival guards, so a
+     * mortal kit would silently wear out and break mid-fight — taking its
+     * custom-enchant passives with it. The operator's own items are untouched
+     * (the loadout accessors already return clones).</p>
+     *
+     * @return true if the whole kit was written; false on a transient failure,
+     *         which re-arms the dirty flag for a retry next tick.
+     */
+    private boolean applyLoadout() {
+        Loadout kit = loadout;
+        try {
+            org.bukkit.inventory.PlayerInventory inventory = spawned.player().getInventory();
+            inventory.setHelmet(durable(kit.helmet()));
+            inventory.setChestplate(durable(kit.chestplate()));
+            inventory.setLeggings(durable(kit.leggings()));
+            inventory.setBoots(durable(kit.boots()));
+            inventory.setItemInMainHand(durable(kit.mainHand()));
+            inventory.setItemInOffHand(durable(kit.offHand()));
+            return true;
+        } catch (Throwable failure) {
+            logger.warning("[" + name + "] equipping the loadout failed: " + failure);
+            return false;
+        }
+    }
+
+    /** Stamp a kit piece Unbreakable so a tireless fixture's gear never wears out. */
+    private static @Nullable org.bukkit.inventory.ItemStack durable(
+            @Nullable org.bukkit.inventory.ItemStack item) {
+        if (item == null) {
+            return null;
+        }
+        org.bukkit.inventory.meta.ItemMeta meta = item.getItemMeta();
+        if (meta != null) {
+            meta.setUnbreakable(true);
+            item.setItemMeta(meta);
+        }
+        return item;
     }
 
     @Override
