@@ -8,6 +8,9 @@ import me.vexmc.simpleboxer.command.BoxerCommands;
 import me.vexmc.simpleboxer.common.scheduling.Scheduling;
 import me.vexmc.simpleboxer.config.ConfigStore;
 import me.vexmc.simpleboxer.guard.SurvivalGuards;
+import me.vexmc.simpleboxer.gui.ChatPrompts;
+import me.vexmc.simpleboxer.gui.Gui;
+import me.vexmc.simpleboxer.gui.MenuListener;
 import me.vexmc.simpleboxer.identity.BoxerJoinListener;
 import me.vexmc.simpleboxer.platform.BukkitScheduling;
 import me.vexmc.simpleboxer.platform.FoliaScheduling;
@@ -31,6 +34,7 @@ public final class SimpleBoxerPlugin extends JavaPlugin {
     private Scheduling scheduling;
     private ConfigStore configStore;
     private BoxerManager boxerManager;
+    private Gui gui;
 
     @Override
     public void onEnable() {
@@ -54,9 +58,17 @@ public final class SimpleBoxerPlugin extends JavaPlugin {
         }
         getServer().getServicesManager().register(
                 BoxerService.class, boxerManager, this, ServicePriority.Normal);
+
+        // The GUI is the front door: /boxer opens it, and every spawn, tune,
+        // target, kit and config edit is reachable without typing a command.
+        ChatPrompts chatPrompts = new ChatPrompts(scheduling);
+        this.gui = new Gui(this, boxerManager, configStore, scheduling, chatPrompts);
+        getServer().getPluginManager().registerEvents(new MenuListener(), this);
+        getServer().getPluginManager().registerEvents(chatPrompts, this);
+
         PluginCommand boxerCommand = getCommand("boxer");
         if (boxerCommand != null) {
-            BoxerCommands executor = new BoxerCommands(boxerManager, configStore);
+            BoxerCommands executor = new BoxerCommands(boxerManager, configStore, gui);
             boxerCommand.setExecutor(executor);
             boxerCommand.setTabCompleter(executor);
         }
@@ -96,5 +108,13 @@ public final class SimpleBoxerPlugin extends JavaPlugin {
             throw new IllegalStateException("SimpleBoxer is not enabled");
         }
         return boxerManager;
+    }
+
+    /** The in-game menu system — {@code openMain(player)} raises the root hub. */
+    public @NotNull Gui gui() {
+        if (gui == null) {
+            throw new IllegalStateException("SimpleBoxer is not enabled");
+        }
+        return gui;
     }
 }

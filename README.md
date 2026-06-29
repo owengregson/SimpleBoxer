@@ -37,6 +37,14 @@ rides the same wire:
 
 ## Features
 
+- 🖥️ **GUI-first** — run `/boxer` and everything (spawn, tune, target, kit,
+  presets, config) is point-and-click. No command syntax to memorise; the
+  command tree stays for console and scripts.
+- 🎒 **Virtual inventories** — kit a boxer out in armor and weapons, including
+  **custom-enchanted gear** (StarEnchants and friends). It's a real player, so
+  vanilla *and* custom enchant effects apply exactly as they would to a person
+  wearing the same items — armor protects, weapons proc on hit, passive armor
+  enchants tick.
 - 🥊 **Real-player bots** — no NPC shortcuts; the server sees a `ServerPlayer`.
 - 🎚️ **Difficulty ladder** — `dummy` → `easy` → `medium` → `hard` → `expert` →
   `aimbot`, each a full behaviour bundle.
@@ -89,27 +97,57 @@ That's it. By default only operators can use the commands (see
 
 ## Quick start
 
+Just run:
+
 ```
-/boxer spawn Bot                       # an unhandicapped partner at your feet
-/boxer spawn Bot hard                  # pick a difficulty from the ladder
+/boxer
+```
+
+That opens the **menu** — the front door for everything. From there you can:
+
+- **Spawn a Boxer** — name it, pick a difficulty, choose a skin and target, and
+  build its starting kit, then drop it at your feet.
+- **Manage Boxers** — one head per live boxer; click to retune, re-kit, set a
+  target, pause/resume, teleport, or remove. Bulk pause/resume/remove too.
+- **Presets & Defaults** — edit the spawn defaults and the difficulty presets,
+  or create your own — all saved to `config.yml`.
+- **Plugin Settings** — tab-list visibility and a config reload.
+
+Alias: `/sb` works anywhere `/boxer` does.
+
+### Kitting a boxer (virtual inventory)
+
+Open a boxer's **Kit** screen and drop items into the six equipment slots — four
+armor pieces and both hands. It never touches your real items: cursor-click a
+slot to equip a *copy* (paint as many boxers as you like from one item in
+creative), shift-click your own gear to add it, or hit **Copy my gear** to mirror
+what you're wearing. Because the boxer is a real player, **custom-enchanted gear
+behaves exactly as it would on a person** — armor protects and procs, weapons
+activate on hit, and passive armor enchants tick. The kit survives death and
+respawn.
+
+### Prefer commands? They still work
+
+The full command tree remains for console and scripting:
+
+```
 /boxer spawn Bot expert skin:Notch target:Steve
 /boxer target Bot Steve                # sic an existing boxer onto a player
 /boxer set Bot ping 150                # tune anything, live
 /boxer pause Bot                       # freeze its brain (it still takes hits)
-/boxer info Bot                        # inspect its current settings
 /boxer remove all                      # clean up
 ```
-
-Alias: `/sb` works anywhere `/boxer` does.
 
 ---
 
 ## Commands
 
-All commands are under `/boxer` (alias `/sb`).
+All commands are under `/boxer` (alias `/sb`). **Bare `/boxer` opens the menu** —
+the commands below exist for console and scripting, but you never *need* them.
 
 | Command | Description |
 | --- | --- |
+| `/boxer` · `/boxer menu` | Open the management GUI (players only). |
 | `/boxer spawn <name> [preset] [skin:<player>] [target:<player>] [at <x> <y> <z>]` | Spawn a boxer. With no preset it uses your `defaults`. `at` is required from console. |
 | `/boxer remove <name\|all>` | Remove one boxer, or every boxer. |
 | `/boxer list` | List live boxers with their target, ping, and CPS. |
@@ -164,6 +202,7 @@ Everything defaults to **operators only**. Grant these nodes to delegate.
 
 | Node | Grants | Default |
 | --- | --- | --- |
+| `simpleboxer.gui` | Open and use the in-game menu (the full toolset on one screen) | op |
 | `simpleboxer.command.use` | Run `/boxer`, plus `help`, `list`, `info` | op |
 | `simpleboxer.command.spawn` | `spawn` and `remove` | op |
 | `simpleboxer.command.control` | `target`, `pause`, `resume` | op |
@@ -239,6 +278,20 @@ boxers.spawn(new BoxerSpawnRequest(
 ```
 
 `BoxerSpawnEvent` and `BoxerRemoveEvent` fire on the Bukkit event bus.
+
+Boxers carry a virtual inventory you can read and set — kit one out (custom
+enchants included) and it behaves like a player wearing the same gear:
+
+```java
+boxer.equip(new Loadout(
+        helmet, chestplate, leggings, boots,   // any ItemStacks, or null
+        mainHandWeapon, offHandShield));
+
+Loadout worn = boxer.loadout();                 // immutable, defensively copied
+```
+
+A starting kit can also ride the spawn request — `new BoxerSpawnRequest(name,
+loc, settings, skin, target, loadout)` — so a boxer spawns already dressed.
 
 ---
 

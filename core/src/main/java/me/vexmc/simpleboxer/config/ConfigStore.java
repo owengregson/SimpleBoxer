@@ -8,6 +8,7 @@ import java.util.TreeSet;
 import java.util.concurrent.atomic.AtomicReference;
 import me.vexmc.simpleboxer.common.settings.BoxerSettings;
 import me.vexmc.simpleboxer.common.settings.BoxerSettingsParser;
+import me.vexmc.simpleboxer.common.settings.BoxerSettingsWriter;
 import me.vexmc.simpleboxer.common.settings.DifficultyPresets;
 import org.bukkit.configuration.ConfigurationSection;
 import org.bukkit.configuration.file.FileConfiguration;
@@ -75,6 +76,68 @@ public final class ConfigStore {
         }
 
         current.set(new Snapshot(file.getBoolean("hide-from-tab", true), defaults, presets));
+    }
+
+    /* ------------------------------------------------------------------ */
+    /*  GUI-driven persistence — write a section, save, republish.         */
+    /* ------------------------------------------------------------------ */
+
+    /** Persist the {@code defaults} block and republish the snapshot. */
+    public void saveDefaults(@NotNull BoxerSettings settings) {
+        FileConfiguration file = plugin.getConfig();
+        file.set("defaults", null);
+        BoxerSettingsWriter.write(file.createSection("defaults"), settings);
+        saveAndReload();
+    }
+
+    /**
+     * Persist a named preset as a FULL block (not a sparse overlay) so the GUI
+     * round-trips its own edits exactly, then republish. The name is normalised
+     * to the same lowercase key the parser uses.
+     */
+    public void savePreset(@NotNull String name, @NotNull BoxerSettings settings) {
+        String key = name.toLowerCase(Locale.ROOT);
+        FileConfiguration file = plugin.getConfig();
+        ConfigurationSection presets = file.getConfigurationSection("presets");
+        if (presets == null) {
+            presets = file.createSection("presets");
+        }
+        presets.set(key, null);
+        BoxerSettingsWriter.write(presets.createSection(key), settings);
+        saveAndReload();
+    }
+
+    /**
+     * Remove a preset's file entry and republish. A built-in name reverts to
+     * its built-in definition (the entry was only ever an override); a custom
+     * name disappears entirely.
+     */
+    public void deletePreset(@NotNull String name) {
+        String key = name.toLowerCase(Locale.ROOT);
+        FileConfiguration file = plugin.getConfig();
+        ConfigurationSection presets = file.getConfigurationSection("presets");
+        if (presets != null) {
+            presets.set(key, null);
+        }
+        saveAndReload();
+    }
+
+    /** Whether {@code config.yml} carries an explicit entry for this preset. */
+    public boolean isFileBacked(@NotNull String name) {
+        ConfigurationSection presets =
+                plugin.getConfig().getConfigurationSection("presets");
+        return presets != null && presets.isConfigurationSection(name.toLowerCase(Locale.ROOT));
+    }
+
+    /** Persist the tab-list policy and republish. */
+    public void setHideFromTab(boolean hide) {
+        plugin.getConfig().set("hide-from-tab", hide);
+        saveAndReload();
+    }
+
+    private void saveAndReload() {
+        plugin.saveConfig();
+        reload();
     }
 
     /**

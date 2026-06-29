@@ -17,7 +17,7 @@ softdepend: [Mental, OldCombatMechanics, packetevents]
 
 commands:
   boxer:
-    description: SimpleBoxer root command — spawn, remove, target, pause, tune and inspect boxers.
+    description: SimpleBoxer root command — open the GUI, or spawn/remove/target/pause/tune/inspect boxers.
     aliases: [sb]
     permission: simpleboxer.command.use
 
@@ -26,11 +26,15 @@ permissions:
     description: Grants every SimpleBoxer permission.
     default: op
     children:
+      simpleboxer.gui: true
       simpleboxer.command.use: true
       simpleboxer.command.spawn: true
       simpleboxer.command.control: true
       simpleboxer.command.tune: true
       simpleboxer.command.reload: true
+  simpleboxer.gui:
+    description: Open and use the in-game management GUI (the full toolset on one screen).
+    default: op
   simpleboxer.command.use:
     description: Use /boxer, help, list and inspection.
     default: op

@@ -110,6 +110,21 @@ public record BoxerSettings(
                 wtap, movement, invincible, feedHunger);
     }
 
+    public @NotNull BoxerSettings withClickJitter(double newClickJitter) {
+        return new BoxerSettings(pingMs, cps, newClickJitter, aim, reach, aimToleranceDegrees,
+                wtap, movement, invincible, feedHunger);
+    }
+
+    public @NotNull BoxerSettings withAimToleranceDegrees(double newAimToleranceDegrees) {
+        return new BoxerSettings(pingMs, cps, clickJitter, aim, reach, newAimToleranceDegrees,
+                wtap, movement, invincible, feedHunger);
+    }
+
+    public @NotNull BoxerSettings withFeedHunger(boolean newFeedHunger) {
+        return new BoxerSettings(pingMs, cps, clickJitter, aim, reach, aimToleranceDegrees,
+                wtap, movement, invincible, newFeedHunger);
+    }
+
     public @NotNull BoxerSettings withAim(@NotNull AimParams newAim) {
         return new BoxerSettings(pingMs, cps, clickJitter, newAim, reach, aimToleranceDegrees,
                 wtap, movement, invincible, feedHunger);
