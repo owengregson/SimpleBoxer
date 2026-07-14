@@ -39,10 +39,13 @@ final class BoxerMenu extends Menu {
 
         BoxerSettings settings = boxer.settings();
         String target = boxer.target().map(Player::getName).orElse("§8none");
+        boolean down = boxer.state() == Boxer.State.AWAITING_RESPAWN;
+        String status = down ? "§c☠ down (awaiting respawn)"
+                : (boxer.paused() ? "§e⏸ paused" : "§a▶ active");
 
         set(4, Button.display(Icon.head(boxer.player())
                 .name("§6§l" + boxer.name())
-                .lore("§7Status: " + (boxer.paused() ? "§e⏸ paused" : "§a▶ active"),
+                .lore("§7Status: " + status,
                         "§7Target: §f" + target,
                         "§7Ping §f" + settings.pingMs() + "ms§7, CPS §f"
                                 + MenuParts.number(settings.cps()),
@@ -55,7 +58,7 @@ final class BoxerMenu extends Menu {
                         .lore("§7Ping, aim, CPS, reach, w-tap, movement…",
                                 "",
                                 "§eClick to tune").build(),
-                click -> new SettingsMenu(gui(), this, SettingsTarget.forBoxer(boxer))
+                click -> new SettingsHubMenu(gui(), this, SettingsTarget.forBoxer(boxer))
                         .open(click.player())));
 
         set(11, Button.of(Icon.of(Material.IRON_CHESTPLATE).clean()
@@ -144,6 +147,23 @@ final class BoxerMenu extends Menu {
                     click.player().sendMessage("§aBrought §f" + boxer.name() + "§a to you.");
                     click.refresh();
                 }));
+
+        // Only a down boxer (manual-death mode) can be brought back — the button
+        // appears exactly while it is useful.
+        if (down) {
+            set(30, Button.of(Icon.of(Material.RESPAWN_ANCHOR).glow()
+                            .name("§a§l✦ Respawn")
+                            .lore("§7This boxer died and is waiting.",
+                                    "§7Bring it back at its death spot,",
+                                    "§7full health, kit re-applied.",
+                                    "",
+                                    "§eClick to respawn").build(),
+                    click -> {
+                        boxer.respawn();
+                        click.player().sendMessage("§aRespawned §f" + boxer.name() + "§a.");
+                        click.refresh();
+                    }));
+        }
 
         set(31, Button.of(Icon.of(Material.BARRIER)
                         .name("§c§l☠ Remove")
