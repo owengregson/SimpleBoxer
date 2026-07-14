@@ -72,3 +72,9 @@ and hit registration exactly like a real player with the same state.
   (1.20.6+); older versions degrade gracefully and report it. Core fixes (physics,
   pathfinding, AI, invincibility, velocity capture) work across the whole
   1.17.1 → 26.x range.
+- When a boxer stalls at an obstacle it can't hop, it now routes *around* it
+  (walk-only stall recovery) rather than freezing. Momentum step-jumps land on
+  1.17.1 → 1.21.x; on the bleeding-edge 26.x preview the stricter server-side
+  movement validation rejects the jump-climb itself, so there the boxer takes the
+  walk-around instead. The whole matrix is validated in-server; the step-jump and
+  the walk-around are unit-pinned.

@@ -49,6 +49,18 @@ public final class LocalPathPlanner {
      */
     public @NotNull Optional<List<Vec3d>> route(@NotNull Vec3d start, @NotNull Vec3d goal,
             @NotNull CollisionView world, int budget) {
+        return route(start, goal, world, budget, true);
+    }
+
+    /**
+     * As {@link #route(Vec3d, Vec3d, CollisionView, int)}, but when {@code allowJump}
+     * is false the search refuses JUMP edges (rises above the auto-step height),
+     * yielding a WALK-ONLY route that goes AROUND a block-high obstacle rather than
+     * over it. Stall recovery uses this: a boxer already stuck against a step it
+     * couldn't hop should route around it, not steer back into the same jump.
+     */
+    public @NotNull Optional<List<Vec3d>> route(@NotNull Vec3d start, @NotNull Vec3d goal,
+            @NotNull CollisionView world, int budget, boolean allowJump) {
         int sx = (int) Math.floor(start.x());
         int sz = (int) Math.floor(start.z());
 
@@ -124,6 +136,9 @@ public final class LocalPathPlanner {
                     }
 
                     boolean jump = nFloor - curFloor > me.vexmc.simpleboxer.common.physics.ClientPhysics.STEP_HEIGHT + EPS;
+                    if (jump && !allowJump) {
+                        continue; // walk-only route: go around a block-high step, not over it
+                    }
                     double edge = (diagonal ? DIAGONAL : 1.0) + (jump ? JUMP_COST : 0.0);
                     double tentative = curG + edge;
                     Double best = gScore.get(nKey);

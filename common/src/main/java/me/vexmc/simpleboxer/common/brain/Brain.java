@@ -236,7 +236,14 @@ public final class Brain {
         if (t == null) {
             return false;
         }
-        Optional<List<Vec3d>> route = planner.route(p.self().position(), t.position(), world, PLAN_BUDGET);
+        Vec3d self = p.self().position();
+        // Stall recovery: the boxer is stuck precisely because a reactive step-up
+        // didn't get it through, so route AROUND the obstacle (walk-only) first.
+        // Only fall back to a jump-allowed route if there is genuinely no way around.
+        Optional<List<Vec3d>> route = planner.route(self, t.position(), world, PLAN_BUDGET, false);
+        if (route.isEmpty() || route.get().isEmpty()) {
+            route = planner.route(self, t.position(), world, PLAN_BUDGET, true);
+        }
         if (route.isEmpty() || route.get().isEmpty()) {
             return false;
         }

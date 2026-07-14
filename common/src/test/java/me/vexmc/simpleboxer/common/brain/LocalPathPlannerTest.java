@@ -37,6 +37,26 @@ class LocalPathPlannerTest {
     }
 
     @Test
+    void walkOnlyRoutesAroundAOneBlockStepInsteadOfOverIt() {
+        // A one-block step (y 64..65, a jumpable STEP) at x=3 across z cells -1,0,1,
+        // with open floor at z=±2. A jump-allowed route hops straight over it; the
+        // walk-only route stall recovery uses must detour around the open ends.
+        FakeWorld world = FakeWorld.floorAt(64).block(3, 64, -1).block(3, 64, 0).block(3, 64, 1);
+        Vec3d start = new Vec3d(0, 65, 0);
+        Vec3d goal = new Vec3d(6, 65, 0);
+
+        var overIt = planner.route(start, goal, world, 500, true);
+        assertTrue(overIt.isPresent(), "a jump-allowed route hops straight over the step");
+        assertTrue(overIt.get().stream().allMatch(w -> Math.abs(w.z() - 0.5) < 1.0E-6),
+                "jump-allowed route stays in the straight z lane (over the step)");
+
+        var around = planner.route(start, goal, world, 500, false);
+        assertTrue(around.isPresent(), "a walk-only route around the step exists (open at z=±2)");
+        assertTrue(around.get().stream().anyMatch(w -> Math.abs(w.z() - 0.5) > 1.5),
+                "walk-only route must go AROUND the step (a z detour), not over it");
+    }
+
+    @Test
     void routesAroundATwoTallWall() {
         // A two-tall wall (y 64..66) at x=3 spanning z cells -1,0,1 blocks the straight
         // shot from (0,0) to (6,0); the only way through is to detour in z.
