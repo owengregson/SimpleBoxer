@@ -42,7 +42,24 @@ class BoxerSettingsWriterTest {
         BoxerSettings custom = new BoxerSettings(
                 175, 13.5, 0.42, new AimParams(0.61, 0.33, 47.0),
                 4.25, 3.5, new WTap(true, 4, 7),
-                new Movement(Movement.Style.STRAFE_WEAVE, 2.5, false), false, false);
+                new Movement(Movement.Style.STRAFE_WEAVE, 2.5, false), false, false,
+                BoxerSettings.InvincibleMode.ZERO_DAMAGE, BoxerSettings.Death.DEFAULT,
+                BoxerSettings.Combat.OFF, BoxerSettings.SelfHeal.OFF,
+                BoxerSettings.Items.DEFAULT, BoxerSettings.Hunger.DEFAULT);
+        assertEquals(custom, roundTrip(custom));
+    }
+
+    @Test
+    void reworkSubRecordsRoundTrip() {
+        BoxerSettings custom = new BoxerSettings(
+                20, 12.0, 0.18, AimParams.SHARP, 3.0, 5.0, new WTap(true, 0, 2),
+                new Movement(Movement.Style.STRAFE_CIRCLE, 1.5, true), false, false,
+                BoxerSettings.InvincibleMode.LEGACY_RESTORE,
+                new BoxerSettings.Death(true, BoxerSettings.Death.Mode.MANUAL),
+                new BoxerSettings.Combat(true, true, 2.5, 5.5, true, true, 0.07),
+                new BoxerSettings.SelfHeal(true, 7.0, 17.0, 4),
+                new BoxerSettings.Items(true, true, 1, 2, 3, 4, 5),
+                new BoxerSettings.Hunger(true, 12));
         assertEquals(custom, roundTrip(custom));
     }
 

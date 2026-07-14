@@ -78,13 +78,70 @@ defaults:
     # server's live movement-speed attribute, so Speed/Slowness potions
     # and plugin modifiers change their pace like any real player's.
     sprint: true
-  # Take every hit fully (knockback, immunity, hit events) but restore the
-  # health afterwards. Damage is NEVER cancelled or reduced — that would
-  # change combat semantics. A single hit beyond max health still kills;
-  # the boxer respawns in place immediately.
-  invincible: true
-  # Pin hunger full: sprint stays legal, no exhaustion noise.
+  # Whether the boxer can be hurt at all. FALSE (the default) makes a boxer a
+  # mortal sparring partner — it takes damage, can die, and (see `death` below)
+  # drops its kit and stays down until you respawn it. Set TRUE for an immortal
+  # fixture (the built-in `dummy` preset does this for a punching bag).
+  invincible: false
+  # HOW an invincible boxer survives, when `invincible` is true:
+  #   zero-damage    — the fixed, proper invincibility: the hit registers fully
+  #                    (knockback, i-frames, hurt animation) but the damage is
+  #                    zeroed, so no burst can ever kill. The default.
+  #   legacy-restore — take the hit, restore health next tick (a one-shot beyond
+  #                    max HP still dies). Only for tests asserting exact damage
+  #                    numbers through the MONITOR priority.
+  invincible-mode: zero-damage
+  # What happens when a mortal boxer's health reaches zero.
+  death:
+    # Drop the boxer's items into the world on death (like a real player).
+    drop-items: true
+    # manual       — die and stay down until respawned (/boxer respawn or the GUI).
+    # auto-respawn — pop back up in place immediately (the classic fixture behavior).
+    mode: manual
+  # Pin hunger full: sprint stays legal, no exhaustion noise. Set `hunger.natural`
+  # below to let the boxer actually get hungry and eat.
   feed-hunger: true
+  # Hunger behavior (only when feed-hunger is false / natural is true).
+  hunger:
+    # Let vanilla exhaustion run so the boxer gets hungry and eats.
+    natural: false
+    # Food level (0-20) at which the boxer stops fighting to eat.
+    eat-threshold: 14
+  # Opt-in combat techniques (all off by default — the default boxer just rushes).
+  combat:
+    # Block between hits with a sword to re-arm the sprint bonus (needs Mental).
+    block-hit: false
+    # Swap to a fishing rod to knock an approaching target back before comboing.
+    rod-knockback: false
+    rod-min: 3.0
+    rod-max: 6.0
+    # Choose strafe direction from how the opponent is aiming at the boxer.
+    adaptive-strafe: false
+    # Straight-line s-tap combos (sprint reset, no A/D strafe).
+    s-tap: false
+    # Fraction of clicks intentionally aimed off-target (0-1).
+    miss-chance: 0.0
+  # Splash-potion self-heal (mortal boxers only).
+  self-heal:
+    enabled: false
+    # Health (0-20) that triggers a heal routine.
+    trigger-health: 6.0
+    # Health (0-20) to recover to before re-engaging.
+    resume-health: 18.0
+    # Most instant-health splashes to spend per heal.
+    splash-cap: 6
+  # Inventory behavior.
+  items:
+    # Vacuum nearby dropped items into the boxer's real inventory.
+    auto-pickup: false
+    # Re-stamp the fixed kit every tick (a pure fixture whose gear never changes).
+    lock-loadout: false
+    # Which hotbar slot (0-8) holds each tool the brain reaches for.
+    weapon-slot: 0
+    rod-slot: 1
+    pot-slot: 2
+    food-slot: 3
+    block-slot: 4
 
 # Named presets selectable at spawn (/boxer spawn <name> <preset>) and via
 # /boxer set <name> preset <preset>. Each is a sparse overlay over
