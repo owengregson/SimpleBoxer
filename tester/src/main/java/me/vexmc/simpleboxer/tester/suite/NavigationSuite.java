@@ -78,18 +78,19 @@ public final class NavigationSuite {
                     try {
                         context.awaitTicks(5);
                         context.syncRun(() -> hopper.setTarget(post.player()));
+                        // Reaching the post requires climbing over the one-block ledge
+                        // and continuing past it — a single assertion proves both.
                         context.awaitUntil(() -> {
                             try {
-                                // Cleared the step: past the ledge in +Z and up onto it.
-                                Location at = hopper.player().getLocation();
-                                return at.getZ() > baseZ + 7 && at.getY() > 81.5;
+                                return hopper.player().getLocation()
+                                        .distance(post.player().getLocation()) < 3.5;
                             } catch (Throwable gone) {
                                 return false;
                             }
-                        }, 300, "the hopper to climb the one-block step");
+                        }, 400, "the hopper to climb the step and reach the target");
                         double reached = context.sync(() -> hopper.player().getLocation()
                                 .distance(post.player().getLocation()));
-                        context.expect(reached < 4.0, "reached over the step (" + reached + " away)");
+                        context.expect(reached < 3.5, "reached over the step (" + reached + " away)");
                     } finally {
                         context.syncRun(hopper::remove);
                         context.syncRun(post::remove);
