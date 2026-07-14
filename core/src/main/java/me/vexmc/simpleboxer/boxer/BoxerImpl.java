@@ -103,6 +103,9 @@ final class BoxerImpl implements Boxer {
     private volatile State state = State.ALIVE;
     private volatile boolean respawnRequested;
     private volatile @Nullable Location deathSpot;
+    /** Retry throttle: a scheduled respawn that fails (offline hop, throw) is retried. */
+    private int respawnRetryIn;
+    private static final int RESPAWN_RETRY_TICKS = 20;
 
     /**
      * The boxer's worn kit. Published from any thread (API/GUI); applied to the
@@ -122,6 +125,7 @@ final class BoxerImpl implements Boxer {
     /** Previous matured target yaw, for the opponent-aim tracking-rate estimate. */
     private float prevTargetYaw;
     private boolean hasPrevTargetYaw;
+    private @Nullable Player prevAimTarget;
 
     /** The crosshair the brain drove this tick — used for move packets + item use. */
     private float aimYaw;
@@ -135,8 +139,12 @@ final class BoxerImpl implements Boxer {
     private int usingItemTicks;
     /** Per-boxer block-change sequence for use-item packets (1.19+). */
     private int useSequence;
-    /** A monotonic tick counter grouping knockback samples that share a server tick. */
-    private long serverTick;
+    /**
+     * A monotonic tick counter grouping knockback samples that share a server tick.
+     * Written only by the owning tick; volatile so the knockback listeners (which
+     * may run on another thread) read a fresh, untorn value.
+     */
+    private volatile long serverTick;
 
     private double lastSentX;
     private double lastSentY;
@@ -298,7 +306,7 @@ final class BoxerImpl implements Boxer {
         //    resolver applies the single winning velocity into the sim.
         for (CapturedPacket captured : outbound.drain(now, oneWay)) {
             for (Inbound inbound : packetIO.recognize(captured.packet())) {
-                route(inbound, now);
+                route(inbound, now, captured.nanos());
             }
         }
         knockback.resolve(now, oneWay, physicsSink);
@@ -397,9 +405,15 @@ final class BoxerImpl implements Boxer {
         for (Action action : actions.drain(now, oneWay)) {
             dispatch(action);
         }
+        // Drive the respawn, retrying until markAlive() actually lands — a hop that
+        // fails (player briefly offline, a throw) must not strand the boxer dead.
         if (respawnRequested) {
-            respawnRequested = false;
-            manager.requestRespawn(this);
+            if (respawnRetryIn <= 0) {
+                respawnRetryIn = RESPAWN_RETRY_TICKS;
+                manager.requestRespawn(this);
+            } else {
+                respawnRetryIn--;
+            }
         }
     }
 
@@ -478,18 +492,22 @@ final class BoxerImpl implements Boxer {
                 currentTarget.isBlocking(), currentTarget), now);
     }
 
-    private void route(@NotNull Inbound inbound, long now) {
+    private void route(@NotNull Inbound inbound, long now, long captureNanos) {
         if (inbound instanceof Inbound.Velocity velocity) {
             if (velocity.entityId() == spawned.entityId()) {
-                // The tracker's own SetEntityMotion echo — a low-authority hint
-                // the resolver ranks below the melee/velocity-event channels.
+                // The tracker's own SetEntityMotion echo — a low-authority hint the
+                // resolver ranks below the melee/velocity-event channels. Stamped
+                // with its ORIGINAL capture time (not `now`): it already served its
+                // perception delay in the outbound line, so the resolver must not
+                // age it a second time (that would land it a full ping late).
                 knockback.offer(KnockbackResolver.Channel.MOTION_ECHO,
-                        velocity.vx(), velocity.vy(), velocity.vz(), serverTick, now);
+                        velocity.vx(), velocity.vy(), velocity.vz(), serverTick, captureNanos);
             }
             return;
         }
         if (inbound instanceof Inbound.Explosion explosion) {
-            knockback.offerExplosion(explosion.kx(), explosion.ky(), explosion.kz(), serverTick, now);
+            knockback.offerExplosion(explosion.kx(), explosion.ky(), explosion.kz(),
+                    serverTick, captureNanos);
             return;
         }
         if (inbound instanceof Inbound.KeepAlive keepAlive) {
@@ -544,6 +562,12 @@ final class BoxerImpl implements Boxer {
             double distance = Math.sqrt(dx * dx + dz * dz);
             double bearingToMe = Math.toDegrees(Math.atan2(-(physics.x() - view.x()),
                     (physics.z() - view.z())));
+            // Reset the tracking-rate history on a target switch, so the estimate
+            // doesn't emit a spurious spike from an unrelated previous target's yaw.
+            if (view.entity() != prevAimTarget) {
+                hasPrevTargetYaw = false;
+                prevAimTarget = view.entity();
+            }
             double trackRate = 0.0;
             if (hasPrevTargetYaw) {
                 trackRate = Math.abs(wrapDegrees(view.yaw() - prevTargetYaw));
@@ -808,16 +832,26 @@ final class BoxerImpl implements Boxer {
     /*  Lifecycle (manual death / respawn)                                 */
     /* ------------------------------------------------------------------ */
 
-    /** Manager/guard-internal: the boxer died under manual-death and is waiting. */
-    void markAwaitingRespawn(@NotNull Location deathSpot) {
+    /**
+     * Manager/guard-internal: the boxer died and is waiting. {@code autoRespawn}
+     * arms the respawn immediately (auto-respawn mode, or an invincible boxer that
+     * a health-set somehow killed — it must never be left stranded dead); otherwise
+     * it stays down until {@link #respawn()} is called.
+     */
+    void markAwaitingRespawn(@NotNull Location deathSpot, boolean autoRespawn) {
         this.deathSpot = deathSpot.clone();
+        this.respawnRetryIn = 0;
         this.state = State.AWAITING_RESPAWN;
+        if (autoRespawn) {
+            this.respawnRequested = true;
+        }
     }
 
     /** Manager-internal: the boxer has been respawned and is live again. */
     void markAlive() {
         this.state = State.ALIVE;
         this.respawnRequested = false;
+        this.respawnRetryIn = 0;
         this.knockback.clear();
         if (!loadout.isEmpty()) {
             this.loadoutDirty = true;

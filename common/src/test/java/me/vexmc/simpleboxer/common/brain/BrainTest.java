@@ -75,6 +75,22 @@ class BrainTest {
     }
 
     @Test
+    void climbsAStepAcrossALongerApproach() {
+        // Mirrors the on-server nav suite: a one-block step at z=5 spanning several
+        // blocks, a target 8 out. The boxer must hop the step (not stall on it).
+        FakeWorld world = FakeWorld.floorAt(64);
+        for (int x = -4; x <= 4; x++) {
+            world.block(x, 64, 5);
+        }
+        ClientPhysics phys = new ClientPhysics(0, 64, 0);
+        Vec3d target = new Vec3d(0, 64, 8);
+        run(BoxerSettings.DEFAULTS, phys, world, target, 200);
+        assertTrue(horizontalDistance(phys, target) < 3.0,
+                "the boxer hopped the step and reached the target (dist "
+                        + horizontalDistance(phys, target) + ", z=" + phys.z() + ", y=" + phys.y() + ")");
+    }
+
+    @Test
     void holdsTheMeleePocketWithoutWanderingOff() {
         // A rush boxer already in the pocket makes ~no net progress (it is pressed
         // against where the target stands), which must NOT be mistaken for being

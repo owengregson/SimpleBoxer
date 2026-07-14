@@ -165,4 +165,27 @@ class SeekFoodGoalTest {
         assertInstanceOf(Intent.ActionIntent.None.class, afterReset.action());
         assertTrue(afterReset.wantSprint());
     }
+
+    /**
+     * A same-speed chaser holds the gap constant, so the {@code BACKOFF_DISTANCE}
+     * gate never becomes true. The back-off phase must still time out and reach the
+     * eat phase within the tick cap, or the boxer (exclusive + suppressesAttack)
+     * back-pedals forever and never eats.
+     */
+    @Test
+    void backOffTimesOutAndEatsWhenChaserHoldsDistance() {
+        SeekFoodGoal g = new SeekFoodGoal(supplier(NATURAL));
+        BrainMemory mem = new BrainMemory(7L);
+        // Distance pinned BELOW the back-off radius (4.0): the gap never opens.
+        Perception pinned = perc(0.4, true, true, 2.0);
+
+        boolean beganEating = false;
+        for (int tick = 0; tick < SeekFoodGoal.BACKOFF_TICK_CAP + 5 && !beganEating; tick++) {
+            Intent intent = g.decide(pinned, mem);
+            if (intent.action() instanceof Intent.ActionIntent.StartUse) {
+                beganEating = true;
+            }
+        }
+        assertTrue(beganEating, "eating must begin despite the chaser holding the distance constant");
+    }
 }

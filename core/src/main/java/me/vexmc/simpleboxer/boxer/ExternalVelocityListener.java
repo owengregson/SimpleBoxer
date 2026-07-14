@@ -31,6 +31,11 @@ public final class ExternalVelocityListener implements Listener {
 
     @EventHandler(priority = EventPriority.MONITOR)
     public void onVelocity(PlayerVelocityEvent event) {
+        // A cancelled velocity is not applied to the real player (an anti-knockback
+        // or region plugin vetoed it) — so the boxer must not fly off either.
+        if (event.isCancelled()) {
+            return;
+        }
         Player player = event.getPlayer();
         manager.byUuidInternal(player.getUniqueId()).ifPresent(boxer -> {
             Vector velocity = event.getVelocity();

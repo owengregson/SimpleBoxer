@@ -142,6 +142,49 @@ class RodPokeGoalTest {
         assertEquals(RodPokeGoal.POKE_UTILITY, g.utility(p), "the routine re-arms");
     }
 
+    /**
+     * The whole point of the poke is its knockback — which reverses the target's
+     * velocity. If {@code utility()} let that reversal (or the range it opens) pull
+     * the score to 0 mid-cast, the arbiter would forfeit the dwell after the cast and
+     * hand control to Engage BEFORE the swap-back-to-weapon + cooldown-arm phase ran,
+     * stranding the boxer swinging the rod in melee. Once the FSM has left idle the
+     * utility must stay positive so all three phases complete.
+     */
+    @Test
+    void midCastStaysScoredEvenWhenKnockbackReversesClosing() {
+        BoxerSettings s = enabled();
+        RodPokeGoal g = new RodPokeGoal(sup(s));
+        BrainMemory mem = new BrainMemory(0L);
+
+        Perception closing = closingInBand(true);                       // velocity -X (inbound)
+        Perception knockedBack = perception(true, 4.0, new Vec3d(0.3, 0.0, 0.0)); // velocity +X
+
+        // Phase 0 -> 1: raise the rod (still closing).
+        assertTrue(g.utility(closing) > 0.0);
+        g.decide(closing, mem);
+        assertEquals(1, mem.ints("rodPoke", 2)[0]);
+
+        // Phase 1 -> 2: cast (still closing at this instant).
+        assertTrue(g.utility(closing) > 0.0);
+        g.decide(closing, mem);
+        assertEquals(2, mem.ints("rodPoke", 2)[0]);
+
+        // The hook's knockback now reverses the target's velocity. Pre-fix the
+        // closing gate zeroed the score here; post-fix the mid-sequence override
+        // keeps it positive so phase 2 runs.
+        assertEquals(RodPokeGoal.POKE_UTILITY, g.utility(knockedBack),
+                "mid-sequence utility must ignore the closing gate the poke itself defeats");
+
+        // Phase 2: swap back to the weapon and arm the cooldown — the sequence completes.
+        Intent swapBack = g.decide(knockedBack, mem);
+        Intent.ActionIntent.SelectSlot back =
+                assertInstanceOf(Intent.ActionIntent.SelectSlot.class, swapBack.action());
+        assertEquals(s.items().weaponSlot(), back.slot(), "swaps back to the weapon");
+        assertEquals(0, mem.ints("rodPoke", 2)[0], "phase wraps back to idle");
+        assertEquals(RodPokeGoal.COOLDOWN_TICKS, mem.ints("rodPoke", 2)[1],
+                "the swap-back arms the cooldown");
+    }
+
     @Test
     void suppressesAttackWhileHoldingRod() {
         RodPokeGoal g = new RodPokeGoal(sup(enabled()));

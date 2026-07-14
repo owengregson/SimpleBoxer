@@ -67,6 +67,17 @@ public final class RodPokeGoal implements Goal {
         if (!c.rodKnockback() || !p.inv().hasRod() || !p.hasTarget()) {
             return 0.0;
         }
+        // Mid-sequence override: once the cast FSM has left idle (phase != 0), keep a
+        // positive score REGARDLESS of the band/closing/cooldown gates below, so the
+        // arbiter does not forfeit our dwell mid-cast. The poke's OWN hook-knockback
+        // reverses the target's velocity (and opens the range), which would otherwise
+        // trip the closing gate and hand control to Engage before the swap-back-to-
+        // weapon + cooldown-arm phase ever runs — stranding the boxer swinging the rod
+        // uselessly in melee. Phase is READ from the owning boxer's mem here (never
+        // mutated); it is advanced only in decide().
+        if (phase() != 0) {
+            return POKE_UTILITY;
+        }
         Perception.TargetState t = p.target();
         double dist = t.distance();
         if (dist < c.rodMin() || dist > c.rodMax()) {
@@ -139,6 +150,11 @@ public final class RodPokeGoal implements Goal {
     /** Current cooldown ticks from the owning boxer's mem, or 0 before first decide. */
     private int cooldown() {
         return owned == null ? 0 : owned.ints(STATE_ID, 2)[COOLDOWN];
+    }
+
+    /** Current cast phase from the owning boxer's mem, or 0 (idle) before first decide. */
+    private int phase() {
+        return owned == null ? 0 : owned.ints(STATE_ID, 2)[PHASE];
     }
 
     @Override

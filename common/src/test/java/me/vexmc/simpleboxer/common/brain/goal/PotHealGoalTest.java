@@ -212,4 +212,60 @@ class PotHealGoalTest {
         assertEquals(cap, maxPotsThrown, "potsThrown peaks at the cap");
         assertEquals(1, weaponSwaps, "then swaps back to the weapon exactly once");
     }
+
+    /**
+     * The splashCap is an EPISODE budget. When health never recovers, the boxer
+     * throws exactly {@code splashCap} pots and then GIVES UP durably: {@code utility}
+     * must fall to 0 and stay there while below trigger, so the arbiter re-engages
+     * instead of the routine re-latching and looping another full batch forever.
+     * Driven like the real arbiter: {@code decide} runs only on ticks where
+     * {@code utility > 0}.
+     */
+    @Test
+    void splashCapAppliesPerEpisodeAndDoesNotRelatchWhileStillLow() {
+        int cap = 2;
+        PotHealGoal goal = new PotHealGoal(() -> settings(true, false, cap));
+        BrainMemory mem = new BrainMemory(3L);
+        Perception low = perc(0.1, true, 5.0); // 2 HP, well below trigger, never recovers
+
+        int potsThrown = 0;
+        boolean gaveUp = false;
+        for (int tick = 0; tick < 500; tick++) {
+            if (goal.utility(low) <= 0.0) {
+                gaveUp = true; // arbiter would hand control back to Engage here
+                continue;      // ...so the routine does NOT decide this tick
+            }
+            Intent intent = goal.decide(low, mem);
+            if (intent.action() instanceof Intent.ActionIntent.StartUse) {
+                potsThrown++;
+            }
+        }
+
+        assertEquals(cap, potsThrown, "exactly splashCap pots across the whole episode, no re-latch");
+        assertTrue(gaveUp, "utility must drop to 0 after the cap is spent");
+        assertEquals(0.0, goal.utility(low), "still latched OFF while below trigger — no re-throw");
+    }
+
+    /**
+     * A same-speed chaser holds the gap constant, so the {@code RETREAT_DISTANCE}
+     * gate never becomes true. The phase-0 retreat must still time out and reach the
+     * throw phase within the tick cap, or the boxer (exclusive + suppressesAttack)
+     * back-pedals forever and never heals.
+     */
+    @Test
+    void retreatTimesOutAndThrowsWhenChaserHoldsDistance() {
+        PotHealGoal goal = new PotHealGoal(() -> settings(true, false, 6));
+        BrainMemory mem = new BrainMemory(4L);
+        // Distance pinned BELOW the retreat radius (4.5): the gap never opens.
+        Perception pinned = perc(0.1, true, 3.0);
+
+        boolean threw = false;
+        for (int tick = 0; tick < PotHealGoal.RETREAT_TICK_CAP + 5 && !threw; tick++) {
+            Intent intent = goal.decide(pinned, mem);
+            if (intent.action() instanceof Intent.ActionIntent.StartUse) {
+                threw = true;
+            }
+        }
+        assertTrue(threw, "retreat must time out and reach the throw phase despite constant distance");
+    }
 }

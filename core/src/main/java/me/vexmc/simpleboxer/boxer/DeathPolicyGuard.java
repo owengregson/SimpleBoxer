@@ -40,13 +40,14 @@ public final class DeathPolicyGuard implements Listener {
             }
 
             Location deathSpot = player.getLocation().clone();
-            boxer.markAwaitingRespawn(deathSpot);
-            if (death.mode() == BoxerSettings.Death.Mode.AUTO_RESPAWN) {
-                // Pop straight back up in place.
-                manager.requestRespawn(boxer);
-            }
-            // MANUAL: stay dead; the boxer's keep-alive tick holds the connection
-            // until respawn() (the GUI/API) fires.
+            // Auto-respawn if configured — OR if the boxer is nominally invincible
+            // but a health-set (setHealth(0), some /kill paths) bypassed the damage
+            // cap and killed it anyway: such a boxer must never be left stranded dead.
+            boolean autoRespawn = death.mode() == BoxerSettings.Death.Mode.AUTO_RESPAWN
+                    || boxer.settings().invincible();
+            boxer.markAwaitingRespawn(deathSpot, autoRespawn);
+            // MANUAL (and mortal): stay dead; the boxer's keep-alive tick holds the
+            // connection until respawn() (the GUI/API) fires.
         });
     }
 }

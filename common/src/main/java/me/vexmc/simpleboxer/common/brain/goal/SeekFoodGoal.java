@@ -47,13 +47,23 @@ public final class SeekFoodGoal implements Goal {
     private static final double BACKOFF_DISTANCE = 4.0;
     /** Ticks to hold the eat before releasing (vanilla eat is ~32 ticks). */
     private static final int EAT_TICKS = 34;
+    /**
+     * Hard ceiling on time spent backing off before eating anyway. A same-speed
+     * chaser pins the gap constant, so the {@link #BACKOFF_DISTANCE} gate alone can
+     * never become true — eating under pressure beats an infinite backpedal.
+     */
+    public static final int BACKOFF_TICK_CAP = 40;
 
-    /* FSM phases stored in mem.ints("seekFood", 2) = { phase, eatTimer }. */
+    /* FSM state stored in mem.ints("seekFood", 3) = { phase, eatTimer, backOffTicks }. */
     private static final int PHASE_BACK_OFF = 0;
     private static final int PHASE_SWAP_FOOD = 1;
     private static final int PHASE_BEGIN_EAT = 2;
     private static final int PHASE_HOLD = 3;
     private static final int PHASE_SWAP_BACK = 4;
+
+    /* Index of the back-off tick counter in the scratch array. */
+    private static final int BACKOFF_TICKS = 2;
+    private static final int STATE_SIZE = 3;
 
     private final Supplier<BoxerSettings> settings;
 
@@ -100,11 +110,12 @@ public final class SeekFoodGoal implements Goal {
     @Override
     public @NotNull Intent decide(@NotNull Perception p, @NotNull BrainMemory mem) {
         BoxerSettings s = settings.get();
-        int[] st = mem.ints("seekFood", 2);
+        int[] st = mem.ints("seekFood", STATE_SIZE);
         Perception.TargetState t = p.target();
         if (t == null) {
             st[0] = PHASE_BACK_OFF;
             st[1] = 0;
+            st[BACKOFF_TICKS] = 0;
             return Intent.IDLE;
         }
 
@@ -118,9 +129,14 @@ public final class SeekFoodGoal implements Goal {
 
         switch (st[0]) {
             case PHASE_BACK_OFF -> {
-                // Sprint away; once there is room, advance to swapping in food next tick.
-                if (t.distance() > BACKOFF_DISTANCE) {
+                // Sprint away; advance once there is room OR the back-off has run long
+                // enough. A same-speed chaser holds the gap constant, so waiting on
+                // distance alone would deadlock here forever (exclusive +
+                // suppressesAttack) and the boxer would never eat.
+                st[BACKOFF_TICKS] = st[BACKOFF_TICKS] + 1;
+                if (t.distance() > BACKOFF_DISTANCE || st[BACKOFF_TICKS] >= BACKOFF_TICK_CAP) {
                     st[0] = PHASE_SWAP_FOOD;
+                    st[BACKOFF_TICKS] = 0;
                 }
                 return new Intent(awayDir, faceMove, Intent.ActionIntent.none(), true,
                         Intent.JumpHint.NONE);
@@ -153,6 +169,7 @@ public final class SeekFoodGoal implements Goal {
                 // latch releases and combat resumes.
                 st[0] = PHASE_BACK_OFF;
                 st[1] = 0;
+                st[BACKOFF_TICKS] = 0;
                 return new Intent(Vec3d.ZERO, faceMove,
                         Intent.ActionIntent.selectSlot(s.items().weaponSlot()), false,
                         Intent.JumpHint.NONE);
@@ -160,6 +177,7 @@ public final class SeekFoodGoal implements Goal {
             default -> {
                 st[0] = PHASE_BACK_OFF;
                 st[1] = 0;
+                st[BACKOFF_TICKS] = 0;
                 return Intent.IDLE;
             }
         }

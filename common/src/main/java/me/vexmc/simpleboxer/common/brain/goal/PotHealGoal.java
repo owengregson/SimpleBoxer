@@ -8,6 +8,7 @@ import me.vexmc.simpleboxer.common.brain.Perception;
 import me.vexmc.simpleboxer.common.physics.Vec3d;
 import me.vexmc.simpleboxer.common.settings.BoxerSettings;
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 
 /**
  * PotHeal (feature 15) — a MORTAL, low-health boxer disengages, retreats, and
@@ -20,9 +21,16 @@ import org.jetbrains.annotations.NotNull;
  * must decide whether to seize BEFORE the goal wins and {@code decide} ever
  * runs — is handed only a {@link Perception}, not the memory. {@code utility}
  * therefore updates the latch (health crossing {@code triggerHealth} arms it,
- * health reaching {@code resumeHealth} disarms it) but never touches
- * {@link BrainMemory}; the multi-tick FSM counters live in
- * {@code mem.ints("potHeal", 3)}.</p>
+ * health reaching {@code resumeHealth} disarms it); the multi-tick FSM counters
+ * live in {@code mem.ints("potHeal", 5) = {phase, potsThrown, waitTimer, gaveUp,
+ * retreatTicks}}.</p>
+ *
+ * <p>The {@code splashCap} is an EPISODE budget, not a per-cycle one: if the boxer
+ * spends its whole cap without recovering, {@code decide} sets the durable
+ * {@code gaveUp} flag, and {@code utility} reads it (via the {@code mem} it caches
+ * on the first {@code decide}) to stay silent — re-engaging rather than looping
+ * another full batch — until health genuinely climbs back to {@code resumeHealth},
+ * where {@code utility} clears the flag and a fresh trigger re-arms the budget.</p>
  */
 public final class PotHealGoal implements Goal {
 
@@ -39,11 +47,36 @@ public final class PotHealGoal implements Goal {
     private static final double RETREAT_DISTANCE = 4.5;
     /** Ticks to stand in the splash cloud before re-evaluating. */
     private static final int WAIT_TICKS = 10;
+    /**
+     * Hard ceiling on time spent in the phase-0 retreat before drinking anyway. A
+     * same-speed chaser keeps the gap constant, so the {@link #RETREAT_DISTANCE}
+     * gate alone can never become true — drinking under pressure beats an infinite
+     * backpedal.
+     */
+    public static final int RETREAT_TICK_CAP = 40;
+
+    private static final String STATE_ID = "potHeal";
+    private static final int PHASE = 0;
+    private static final int POTS_THROWN = 1;
+    private static final int WAIT_TIMER = 2;
+    /** Durable "spent the cap without recovering" latch — persists across phase cycles. */
+    private static final int GAVE_UP = 3;
+    /** How many consecutive ticks the boxer has been stuck in the phase-0 retreat. */
+    private static final int RETREAT_TICKS = 4;
+    private static final int STATE_SIZE = 5;
 
     private final Supplier<BoxerSettings> settings;
 
     /** Hysteresis latch: armed below trigger, released at/above resume. */
     private boolean latched;
+
+    /**
+     * The owning boxer's scratchpad, captured on the first {@code decide}. Lets the
+     * perception-only {@code utility} read (and clear on recovery) the mem-resident
+     * give-up flag. Null until the goal has decided at least once (treated as "not
+     * given up").
+     */
+    private @Nullable BrainMemory owned;
 
     public PotHealGoal(@NotNull Supplier<BoxerSettings> settings) {
         this.settings = settings;
@@ -63,21 +96,36 @@ public final class PotHealGoal implements Goal {
         // pots and someone to disengage from. Anything else fully disarms.
         if (s.invincible() || !heal.enabled() || !p.inv().hasPots() || !p.hasTarget()) {
             latched = false;
+            setGaveUp(false);
             return 0.0;
         }
 
         double hp20 = p.self().healthPct() * 20.0;
 
-        // Hysteresis: arm when we sink to the trigger, disarm only once we have
-        // climbed back to the resume line. Between the two, hold the last state
-        // so we do not drop out at trigger + epsilon.
-        if (hp20 <= heal.triggerHealth()) {
-            latched = true;
-        } else if (hp20 >= heal.resumeHealth()) {
+        // Hysteresis + episode-wide splash cap. Arm when we sink to the trigger,
+        // disarm only once we have climbed back to the resume line; between the two,
+        // hold the last state so we do not drop out at trigger + epsilon.
+        if (hp20 >= heal.resumeHealth()) {
+            // Genuine recovery: release the heal latch AND clear the give-up latch,
+            // so a future health drop starts a fresh episode with a full pot budget.
             latched = false;
+            setGaveUp(false);
+        } else if (hp20 <= heal.triggerHealth()) {
+            // At/below the trigger. Re-arm ONLY if we have not already spent this
+            // episode's whole splashCap without recovering: that give-up latch stays
+            // durable (utility 0) until health actually climbs back to resume, so the
+            // boxer re-engages instead of looping full pot batches forever.
+            if (!gaveUp()) {
+                if (!latched) {
+                    // A genuine healthy -> trigger crossing: reset the episode's pot
+                    // budget. (Only here — never on a give-up.)
+                    resetPotsThrown();
+                }
+                latched = true;
+            }
         }
 
-        if (!latched) {
+        if (gaveUp() || !latched) {
             return 0.0;
         }
 
@@ -91,6 +139,23 @@ public final class PotHealGoal implements Goal {
             frac = 1.0;
         }
         return Math.max(HOLD_FLOOR, MAX_UTILITY * frac);
+    }
+
+    /** Whether the boxer spent its whole splashCap this episode without recovering. */
+    private boolean gaveUp() {
+        return owned != null && owned.ints(STATE_ID, STATE_SIZE)[GAVE_UP] != 0;
+    }
+
+    private void setGaveUp(boolean value) {
+        if (owned != null) {
+            owned.ints(STATE_ID, STATE_SIZE)[GAVE_UP] = value ? 1 : 0;
+        }
+    }
+
+    private void resetPotsThrown() {
+        if (owned != null) {
+            owned.ints(STATE_ID, STATE_SIZE)[POTS_THROWN] = 0;
+        }
     }
 
     @Override
@@ -107,6 +172,7 @@ public final class PotHealGoal implements Goal {
 
     @Override
     public @NotNull Intent decide(@NotNull Perception p, @NotNull BrainMemory mem) {
+        this.owned = mem;
         Perception.TargetState t = p.target();
         if (t == null) {
             return Intent.IDLE;
@@ -122,50 +188,69 @@ public final class PotHealGoal implements Goal {
 
         Intent.FacingIntent feet = Intent.FacingIntent.aimAt(self.x(), self.y() - 0.5, self.z());
 
-        // FSM state: {phase, potsThrown, waitTimer}.
-        int[] st = mem.ints("potHeal", 3);
-        int phase = st[0];
+        // FSM state: {phase, potsThrown, waitTimer, gaveUp, retreatTicks}.
+        int[] st = mem.ints(STATE_ID, STATE_SIZE);
+        int phase = st[PHASE];
 
         switch (phase) {
             case 0: // create space — sprint straight away until we have room
-                if (t.distance() > RETREAT_DISTANCE) {
-                    st[0] = 1;
+                // Advance once we have distance OR the retreat has run long enough: a
+                // same-speed chaser pins the gap, so waiting on distance alone would
+                // deadlock here forever (exclusive + suppressesAttack) and never heal.
+                st[RETREAT_TICKS] = st[RETREAT_TICKS] + 1;
+                if (t.distance() > RETREAT_DISTANCE || st[RETREAT_TICKS] >= RETREAT_TICK_CAP) {
+                    st[PHASE] = 1;
+                    st[RETREAT_TICKS] = 0;
                 }
                 return new Intent(awayDir, Intent.FacingIntent.faceMove(),
                         Intent.ActionIntent.none(), true, Intent.JumpHint.NONE);
 
             case 1: // swap to the pot slot, keep backing off
-                st[0] = 2;
+                st[PHASE] = 2;
                 return new Intent(awayDir, Intent.FacingIntent.faceMove(),
                         Intent.ActionIntent.selectSlot(s.items().potSlot()),
                         true, Intent.JumpHint.NONE);
 
             case 2: // throw the splash pot straight down at our own feet, standing still
-                st[1] = st[1] + 1;       // potsThrown++
-                st[2] = WAIT_TICKS;       // waitTimer
-                st[0] = 3;
+                st[POTS_THROWN] = st[POTS_THROWN] + 1;
+                st[WAIT_TIMER] = WAIT_TICKS;
+                st[PHASE] = 3;
                 return new Intent(Vec3d.ZERO, feet,
                         Intent.ActionIntent.startUse(true), false, Intent.JumpHint.NONE);
 
             case 3: // stand in the cloud; when it settles, recover-or-repeat
-                st[2] = st[2] - 1;
-                if (st[2] <= 0) {
+                st[WAIT_TIMER] = st[WAIT_TIMER] - 1;
+                if (st[WAIT_TIMER] <= 0) {
                     double hp20 = self.healthPct() * 20.0;
                     boolean recovered = hp20 >= s.selfHeal().resumeHealth();
-                    boolean capped = st[1] >= s.selfHeal().splashCap();
-                    st[0] = (recovered || capped) ? 4 : 1;
+                    boolean capped = st[POTS_THROWN] >= s.selfHeal().splashCap();
+                    st[PHASE] = (recovered || capped) ? 4 : 1;
                 }
                 return new Intent(Vec3d.ZERO, feet,
                         Intent.ActionIntent.none(), false, Intent.JumpHint.NONE);
 
-            default: // 4: swap back to the weapon, reset, and release the latch
-                st[0] = 0;
-                st[1] = 0;
-                st[2] = 0;
+            default: { // 4: swap the weapon back, then either finish or give up
+                double hp20 = self.healthPct() * 20.0;
+                boolean recovered = hp20 >= s.selfHeal().resumeHealth();
+                st[PHASE] = 0;
+                st[WAIT_TIMER] = 0;
+                st[RETREAT_TICKS] = 0;
                 latched = false;
+                if (recovered) {
+                    // Genuine completion: clear the pot budget and the give-up latch.
+                    st[POTS_THROWN] = 0;
+                    st[GAVE_UP] = 0;
+                } else {
+                    // Cap spent without recovering: give up durably. KEEP potsThrown
+                    // (it is only reset on a fresh healthy -> trigger crossing) and set
+                    // the give-up latch so utility stays 0 until health reaches resume,
+                    // instead of re-latching and throwing another full splashCap batch.
+                    st[GAVE_UP] = 1;
+                }
                 return new Intent(Vec3d.ZERO, Intent.FacingIntent.faceMove(),
                         Intent.ActionIntent.selectSlot(s.items().weaponSlot()),
                         false, Intent.JumpHint.NONE);
+            }
         }
     }
 }
