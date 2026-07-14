@@ -126,8 +126,13 @@ final class BoxerImpl implements Boxer {
     /** The crosshair the brain drove this tick — used for move packets + item use. */
     private float aimYaw;
     private float aimPitch;
-    /** Whether an item is currently being used (block/eat/rod hold), for perception. */
-    private boolean usingItem;
+    /**
+     * Ticks the boxer still counts as "using" its held item, for the perception's
+     * click-suppression signal. A hold (block/eat) refreshes it; a momentary use
+     * (rod cast, pot throw) lets it lapse on its own, so a single use never
+     * suppresses clicks forever.
+     */
+    private int usingItemTicks;
     /** Per-boxer block-change sequence for use-item packets (1.19+). */
     private int useSequence;
     /** A monotonic tick counter grouping knockback samples that share a server tick. */
@@ -279,6 +284,9 @@ final class BoxerImpl implements Boxer {
         long now = System.nanoTime();
         long oneWay = TimeUnit.MILLISECONDS.toNanos(settings.pingMs()) / 2;
         serverTick++;
+        if (usingItemTicks > 0) {
+            usingItemTicks--;
+        }
 
         // A dead boxer awaiting a manual respawn: only keep the connection alive.
         if (state == State.AWAITING_RESPAWN) {
@@ -525,7 +533,7 @@ final class BoxerImpl implements Boxer {
                 physics.x(), physics.y(), physics.z(), physics.velocity(),
                 physics.onGround(), physics.horizontalCollision(),
                 healthPct(), hungerPct(),
-                usingItem ? Perception.UseItemState.USING : Perception.UseItemState.NONE,
+                usingItemTicks > 0 ? Perception.UseItemState.USING : Perception.UseItemState.NONE,
                 safeIsBlocking(spawned.player()));
 
         Perception.TargetState targetState = null;
@@ -775,14 +783,16 @@ final class BoxerImpl implements Boxer {
                 Object packet = packetIO.useItem(use.mainHand(), ++useSequence, aimYaw, aimPitch);
                 if (packet != null) {
                     packetIO.dispatch(packet, spawned.gameListener());
-                    usingItem = true;
+                    // A momentary use (rod/pot) lapses on its own; a hold (block/eat)
+                    // that the routine keeps driving refreshes this each use tick.
+                    usingItemTicks = 4;
                 }
             } else if (action instanceof Action.ReleaseUse) {
                 Object packet = packetIO.releaseUseItem(++useSequence);
                 if (packet != null) {
                     packetIO.dispatch(packet, spawned.gameListener());
                 }
-                usingItem = false;
+                usingItemTicks = 0;
             } else if (action instanceof Action.KeepAlive keepAlive) {
                 Object response = packetIO.keepAliveResponse(keepAlive.id());
                 if (response != null) {

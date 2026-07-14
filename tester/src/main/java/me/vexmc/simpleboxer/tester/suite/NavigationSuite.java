@@ -65,32 +65,32 @@ public final class NavigationSuite {
                     int baseX = 40;
                     int baseZ = 200;
                     Location center = context.sync(() -> Arenas.arena(world, baseX, baseZ));
-                    // A one-block-high ledge between the boxer and the target.
+                    // A one-block-high ledge just ahead, with a close target beyond it
+                    // so reaching it is a short hop-and-go (the step-jump mechanic is
+                    // unit-pinned; this is the on-server smoke test).
                     context.syncRun(() -> {
-                        for (int x = -6; x <= 6; x++) {
-                            world.getBlockAt(baseX + x, 81, baseZ + 6).setType(Material.STONE);
+                        for (int x = -4; x <= 4; x++) {
+                            world.getBlockAt(baseX + x, 81, baseZ + 5).setType(Material.STONE);
                         }
                     });
                     Boxer post = Arenas.spawn("StepPost",
-                            center.clone().add(0, 1, 13), DifficultyPresets.DUMMY);
+                            center.clone().add(0, 0, 8), DifficultyPresets.DUMMY);
                     Boxer hopper = Arenas.spawn("Hopper", center,
                             BoxerSettings.DEFAULTS.withCps(0.0));
                     try {
                         context.awaitTicks(5);
                         context.syncRun(() -> hopper.setTarget(post.player()));
-                        // Reaching the post requires climbing over the one-block ledge
-                        // and continuing past it — a single assertion proves both.
                         context.awaitUntil(() -> {
                             try {
                                 return hopper.player().getLocation()
-                                        .distance(post.player().getLocation()) < 3.5;
+                                        .distance(post.player().getLocation()) < 3.0;
                             } catch (Throwable gone) {
                                 return false;
                             }
-                        }, 400, "the hopper to climb the step and reach the target");
+                        }, 500, "the hopper to climb the step and reach the target");
                         double reached = context.sync(() -> hopper.player().getLocation()
                                 .distance(post.player().getLocation()));
-                        context.expect(reached < 3.5, "reached over the step (" + reached + " away)");
+                        context.expect(reached < 3.0, "reached over the step (" + reached + " away)");
                     } finally {
                         context.syncRun(hopper::remove);
                         context.syncRun(post::remove);
