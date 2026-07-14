@@ -158,15 +158,16 @@ public final class LocalPathPlanner {
     }
 
     /**
-     * True when a diagonal step from {@code (cx,cz)} by {@code (dx,dz)} is not pinched
-     * between two solid corners: at least one of the two orthogonal cells the diagonal
-     * brushes past must itself be standable.
+     * True when a diagonal step from {@code (cx,cz)} by {@code (dx,dz)} clips no solid
+     * corner: BOTH orthogonal cells the 0.6-wide body brushes past must be standable
+     * (the classic no-corner-cutting rule). A single solid flank still overlaps the
+     * body box at the shared corner, so one open side is not enough.
      */
     private static boolean cornerOpen(@NotNull CollisionView world, int cx, int cz,
             int dx, int dz, double fromFloor) {
         boolean sideX = !Double.isNaN(standFloor(world, cx + dx, cz, fromFloor));
         boolean sideZ = !Double.isNaN(standFloor(world, cx, cz + dz, fromFloor));
-        return sideX || sideZ;
+        return sideX && sideZ;
     }
 
     /** Octile distance — the exact 8-direction move count, admissible for our grid. */

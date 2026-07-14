@@ -34,9 +34,15 @@ public final class BrainMemory {
     /* Follow-up-over-terrain gate. */
     public int climbTicks;
 
-    /* Anti-stuck: a rolling record of horizontal progress vs intent. */
-    private final double[] progress = new double[8];
-    private int progressCursor;
+    /* Anti-stuck: a rolling record of recent horizontal POSITIONS, so the net
+     * displacement over the window distinguishes a genuinely-pinned boxer (which
+     * jitters in place — high speed, ~zero net travel) from one creeping along a
+     * wall (low speed but real net travel). */
+    private static final int PROGRESS_WINDOW = 8;
+    private final double[] posX = new double[PROGRESS_WINDOW];
+    private final double[] posZ = new double[PROGRESS_WINDOW];
+    private int posCursor;
+    private boolean posSeeded;
 
     /* A cached local path the navigate goal follows, and its plan bookkeeping. */
     public @Nullable List<Vec3d> path;
@@ -62,19 +68,31 @@ public final class BrainMemory {
         return doubleScratch.computeIfAbsent(routineId, k -> new double[size]);
     }
 
-    /** Record this tick's realized horizontal progress for stall detection. */
-    public void recordProgress(double horizontalDistanceMoved) {
-        progress[progressCursor] = horizontalDistanceMoved;
-        progressCursor = (progressCursor + 1) % progress.length;
+    /** Record the boxer's horizontal position this tick for stall detection. */
+    public void recordPosition(double x, double z) {
+        if (!posSeeded) {
+            for (int i = 0; i < PROGRESS_WINDOW; i++) {
+                posX[i] = x;
+                posZ[i] = z;
+            }
+            posSeeded = true;
+        }
+        posX[posCursor] = x;
+        posZ[posCursor] = z;
+        posCursor = (posCursor + 1) % PROGRESS_WINDOW;
     }
 
-    /** Mean horizontal progress over the recent window (blocks/tick). */
-    public double recentProgress() {
-        double sum = 0.0;
-        for (double value : progress) {
-            sum += value;
-        }
-        return sum / progress.length;
+    /**
+     * Net horizontal displacement across the window (blocks) — the distance from
+     * the oldest recorded position to the newest. Near zero for a boxer stuck
+     * jittering against a wall even while its per-tick speed is high.
+     */
+    public double netProgress() {
+        int newest = (posCursor - 1 + PROGRESS_WINDOW) % PROGRESS_WINDOW;
+        int oldest = posCursor; // the slot about to be overwritten holds the oldest sample
+        double dx = posX[newest] - posX[oldest];
+        double dz = posZ[newest] - posZ[oldest];
+        return Math.sqrt(dx * dx + dz * dz);
     }
 
     /** Forget the cached path (target changed, route failed, or reached). */

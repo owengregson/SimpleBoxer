@@ -36,20 +36,20 @@ class AntiStuckTest {
 
         // Not stuck until the sustained window elapses.
         for (int tick = 0; tick < 2; tick++) {
-            mem.recordProgress(0.0); // realized ~no horizontal travel
+            mem.recordPosition(0.5, 0.5); // stays put -> zero net displacement
             assertFalse(antiStuck.isStuck(p, mem), "should not flag before the window");
             assertFalse(antiStuck.shouldReroute(mem));
         }
 
         // Third qualifying tick trips the flag.
-        mem.recordProgress(0.0);
+        mem.recordPosition(0.5, 0.5);
         assertTrue(antiStuck.isStuck(p, mem), "sustained no-progress + collision -> stuck");
         assertFalse(antiStuck.shouldReroute(mem), "one detour window is not yet a reroute");
 
         // Keep it pinned; eventually a lateral detour is deemed to have failed.
         boolean rerouted = false;
         for (int tick = 0; tick < 20 && !rerouted; tick++) {
-            mem.recordProgress(0.0);
+            mem.recordPosition(0.5, 0.5);
             antiStuck.isStuck(p, mem);
             rerouted = antiStuck.shouldReroute(mem);
         }
@@ -63,7 +63,7 @@ class AntiStuckTest {
 
         // Fill the whole progress window with healthy travel.
         for (int tick = 0; tick < 12; tick++) {
-            mem.recordProgress(0.15);
+            mem.recordPosition(0.5 + tick * 0.5, 0.5); // healthy net travel
             assertFalse(antiStuck.isStuck(p, mem), "moving boxer is not stuck");
         }
         assertFalse(antiStuck.shouldReroute(mem));
@@ -75,7 +75,7 @@ class AntiStuckTest {
         Perception idle = perception(0.5, 64, 0.5, false, true); // no foe -> no move intent
 
         for (int tick = 0; tick < 10; tick++) {
-            mem.recordProgress(0.0);
+            mem.recordPosition(0.5, 0.5);
             assertFalse(antiStuck.isStuck(idle, mem));
         }
         assertFalse(antiStuck.shouldReroute(mem));

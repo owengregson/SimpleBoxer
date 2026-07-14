@@ -121,7 +121,11 @@ public final class Arbiter {
                 // 3) Dwell: the incumbent has not served its minimum yet. It holds
                 //    unless a rival beats it by a large margin.
                 int challenger = argMaxPositive(raw, eff, incIdx);
-                winner = (challenger >= 0 && eff[challenger] >= eff[incIdx] + LARGE_MARGIN)
+                // Measure the break margin against the incumbent's RAW utility so
+                // the commit bonus does not stack on top of LARGE_MARGIN during the
+                // dwell window (a rival that beats the incumbent's real desire by
+                // the margin breaks dwell, as documented).
+                winner = (challenger >= 0 && raw[challenger] >= raw[incIdx] + LARGE_MARGIN)
                         ? challenger
                         : incIdx;
             } else {

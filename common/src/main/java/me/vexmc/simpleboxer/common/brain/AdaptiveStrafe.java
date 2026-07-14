@@ -114,10 +114,15 @@ public final class AdaptiveStrafe {
         }
 
         boolean tracked = p.target().oppTrackRateDegPerTick() > TRACK_THRESHOLD_DEG_PER_TICK;
-        // A wall counts as a hard reason to reverse regardless of the read.
+        // A wall is a hard reason to reverse IMMEDIATELY — it must bypass the
+        // min-dwell (as the non-adaptive path does), or the boxer keeps strafing
+        // into the wall for the whole dwell window. A tight track only reverses
+        // once the dwell has expired, so the juke doesn't chatter every tick.
         boolean walled = p.self().horizontalCollision();
-
-        if ((tracked || walled) && scratch[0] <= 0) {
+        if (walled) {
+            flip(mem);
+            scratch[0] = ADAPTIVE_MIN_DWELL + mem.rng.nextInt(ADAPTIVE_DWELL_JITTER);
+        } else if (tracked && scratch[0] <= 0) {
             flip(mem);
             scratch[0] = ADAPTIVE_MIN_DWELL + mem.rng.nextInt(ADAPTIVE_DWELL_JITTER);
         }

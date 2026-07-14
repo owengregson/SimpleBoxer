@@ -28,11 +28,13 @@ public final class AntiStuck {
     private static final int STUCK_TICKS = 0;
 
     /**
-     * Mean realized progress (blocks/tick) below which we consider the boxer to
-     * be making "no progress". A hair above float noise so a genuinely creeping
-     * boxer (sliding along a wall) doesn't read as pinned.
+     * Net displacement (blocks) over the memory window below which we consider the
+     * boxer to be making "no progress". Position-based, so a boxer jittering in
+     * place against a wall (high per-tick speed, ~zero net travel — the classic
+     * sticky-wall) reads as pinned, while one genuinely creeping along a wall
+     * accumulates enough net travel to clear the bar.
      */
-    private static final double PROGRESS_EPSILON = 0.02;
+    private static final double NET_PROGRESS_EPSILON = 0.35;
 
     /** Consecutive stuck ticks before we flag it (avoids reacting to a one-tick bump). */
     private static final int STUCK_FLAG_TICKS = 3;
@@ -50,26 +52,31 @@ public final class AntiStuck {
     private static final double BACKOFF_SPEED_SCALE = 0.5;
 
     /**
-     * Whether the boxer intends to move yet is pinned on geometry: it has a foe
-     * to pursue, the integrator reported a horizontal collision (its attempted
-     * move was clamped by a block), and realized progress has been ~zero for a
-     * sustained window. Having a target is the movement-intent proxy — an idle
-     * boxer with no one to fight has no heading to be stuck against.
+     * Whether the boxer intends to move yet is going nowhere: it has a foe to
+     * pursue and its net horizontal displacement has been ~zero for a sustained
+     * window. Deliberately does NOT require the integrator's collision flag — the
+     * nastiest sticky case is a boxer that oscillates a hair short of a wall
+     * (steering deflects it before contact, so it never registers a collision)
+     * yet makes no net headway. Having a target is the movement-intent proxy; the
+     * caller further gates escalation to when the boxer is actually trying to
+     * approach (not orbit).
      *
      * <p>Side effect: advances the stuck-ticks counter this tick (or resets it
-     * when any condition fails), so call this exactly once per tick.
+     * when a condition fails), so call this exactly once per tick.
      */
     public boolean isStuck(@NotNull Perception p, @NotNull BrainMemory mem) {
         int[] state = mem.ints(SCRATCH, 1);
 
         boolean intendsToMove = p.hasTarget();
-        boolean pinned = p.self().horizontalCollision();
-        boolean noProgress = mem.recentProgress() < PROGRESS_EPSILON;
+        boolean noProgress = mem.netProgress() < NET_PROGRESS_EPSILON;
 
-        if (intendsToMove && pinned && noProgress) {
+        if (intendsToMove && noProgress) {
             state[STUCK_TICKS]++;
         } else {
-            state[STUCK_TICKS] = 0;
+            // DECAY rather than hard-reset: a lateral detour makes brief bursts of
+            // net travel that would otherwise reset the counter every few ticks, so
+            // a boxer wiggling in place forever would never escalate to a reroute.
+            state[STUCK_TICKS] = Math.max(0, state[STUCK_TICKS] - 1);
         }
         return state[STUCK_TICKS] >= STUCK_FLAG_TICKS;
     }
@@ -92,23 +99,33 @@ public final class AntiStuck {
             return MoveHeading.STILL; // nothing to slide off of
         }
 
-        int sign = mem.strafeSign >= 0 ? 1 : -1;
+        // Own alternation state (not the strafe goal's sign, to avoid coupling
+        // two unrelated routines): wiggle to the opposite side next detour.
+        int[] side = mem.ints("antiStuckDetour", 1);
+        if (side[0] == 0) {
+            side[0] = 1;
+        }
+        int sign = side[0];
+        side[0] = -sign;
         Vec3d preferred = perpendicular(flat, sign);
         Vec3d alternate = perpendicular(flat, -sign);
-        // Wiggle: next detour leads with the opposite side.
-        mem.strafeSign = -sign;
 
         Box box = NavGeometry.playerBox(p.self().x(), p.self().y(), p.self().z());
         if (!NavGeometry.wallAhead(world, box, preferred, NavGeometry.LOOK_AHEAD)) {
-            return new MoveHeading(preferred, intended.nearLedge(), DETOUR_SPEED_SCALE);
+            return heading(preferred, box, world, DETOUR_SPEED_SCALE);
         }
         if (!NavGeometry.wallAhead(world, box, alternate, NavGeometry.LOOK_AHEAD)) {
-            return new MoveHeading(alternate, intended.nearLedge(), DETOUR_SPEED_SCALE);
+            return heading(alternate, box, world, DETOUR_SPEED_SCALE);
         }
 
         // Cornered on both flanks — peel straight back off the obstacle.
-        Vec3d reverse = flat.scale(-1.0);
-        return new MoveHeading(reverse, intended.nearLedge(), BACKOFF_SPEED_SCALE);
+        return heading(flat.scale(-1.0), box, world, BACKOFF_SPEED_SCALE);
+    }
+
+    /** A heading whose ledge flag is computed for the direction actually chosen. */
+    private static MoveHeading heading(Vec3d dir, Box box, CollisionView world, double speedScale) {
+        boolean ledge = NavGeometry.ledgeAhead(world, box, dir, NavGeometry.LOOK_AHEAD, 3.0);
+        return new MoveHeading(dir, ledge, speedScale);
     }
 
     /**
