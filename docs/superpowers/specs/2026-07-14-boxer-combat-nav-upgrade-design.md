@@ -53,13 +53,19 @@ real player with identical state.
 
 ---
 
-# Workstream 1 — Surface fidelity: sticking + cobwebs
+# Workstream 1 — Surface fidelity: sticking, cobwebs, jump-into-wall glue
 
-## 1a. "Sticking" to surfaces
+Three *distinct* surface defects with three different root causes. 1a is horizontal
+(steering); 1c is vertical (the sim↔server boundary) and is a genuine, separate bug —
+the collision integrator itself is faithful (proven by a repro battery), so the "no
+gravity on the wall" glue lives at the packet/server-validation boundary, not in the
+math.
+
+## 1a. Horizontal "sticking" (slide along walls / off ledges)
 
 **Root cause (confirmed):** `ClientPhysics.collide()` is already vanilla-faithful —
 per-axis sweep (Y → larger-horizontal → smaller-horizontal), zeroing only the
-blocked axis, so it *does* slide. The sticking is produced one layer up in
+blocked axis, so it *does* slide. The horizontal sticking is produced one layer up in
 `common/brain/ContextSteering.java`:
 
 - **Unconditional, goal-blind ledge penalty** (`ContextSteering.java:76,128`;
@@ -135,6 +141,47 @@ slowed, and moves/attacks through it at full speed while a real client is trappe
 **New tests:** `ClientPhysicsTest.webClampsHorizontalAndVerticalSpeed`,
 `webTerminalSpeed` (hand-computed pin); `CollisionView` fake gains a web cell.
 
+## 1c. Jump-into-wall vertical "glue" (integration boundary — not the integrator)
+
+**Symptom:** a boxer that jumps into a wall *sometimes* sticks to the wall face and
+stops falling ("glued", no gravity).
+
+**Investigation to date (systematic-debugging Phase 1):**
+- A repro battery drove pure `ClientPhysics` into five wall/jump geometries (tall wall,
+  platform-lip with a pit, overhang, step-then-wall, corner pocket). **All five fall and
+  land correctly** — the integrator is *not* the cause. (Scratch test deleted; its result
+  is captured here and will be re-pinned as a keeper.)
+- The move packet faithfully reports the falling sim position + `horizontalCollision`
+  flag (`BoxerImpl.queueMovement:761`, `dispatch:775`) — the sim tells the server it's
+  falling.
+- Therefore the glue is at the **sim↔server boundary**: the server's `handleMovePlayer`
+  processing of a *clientless* fake player's move-into-wall. **Prime suspect:** a
+  server-side collision / "moved-wrongly" correction (`ClientboundPlayerPositionPacket`)
+  that `route()` applies as `physics.teleport(...)` at `BoxerImpl.java:517-522`, snapping
+  the sim back up; repeated corrections hold it on the wall. The delayed move-packet
+  pipeline (simulated ping) makes it timing/depth dependent → "sometimes." (Secondary
+  suspects: the `doTick`/`reanchorServerPosition` interaction; the client-loaded gate
+  dropping movement.)
+
+**This is a real bug but not yet root-caused** — the failing boundary is live NMS
+move-validation, not unit-testable in `common`. Do **not** guess a fix.
+
+**Plan:**
+1. **Instrument the boundary** (behind the existing `simpleboxer.debug` flag): when
+   `physics.horizontalCollision()` is true, log per tick the sim `(x,y,z,vy)`, the server
+   entity `(x,y,z)`, and every inbound `PositionSync`/teleport correction applied at
+   `route()`. One live run of a boxer into a wall reveals *which* boundary breaks (is the
+   server teleporting it back up? is the entity frozen while the sim falls?).
+2. **Add a `MovementSuite` integration test** — spawn a boxer, place a wall, target a
+   point past it, make it jump into the wall, assert its Y returns to the ground within N
+   ticks. This reproduces in the real NMS environment where the bug lives and becomes the
+   regression pin.
+3. **Fix at the identified boundary** (e.g. suppress/ignore self-inflicted server position
+   corrections while the sim is legitimately wall-collided and falling; or correct the
+   reanchor to preserve the sim's vertical) — chosen only after step 1 shows the evidence.
+4. Add the keeper `ClientPhysicsTest` pin that the integrator itself falls off/along walls
+   (the deleted battery, distilled to assertions).
+
 ---
 
 # Workstream 2 — Baritone-quality pathfinding (server-side A*)
@@ -187,9 +234,19 @@ Optional<List<Vec3d>> route(Vec3d start, Vec3d goal, CollisionView world,
   `FALL_N_BLOCKS[]`, `JUMP_ONE_BLOCK`. Per-edge cost = base per-block (sprint when
   legal) + jump/fall penalties. Reconcile against `ClientPhysics` (`STEP_HEIGHT=0.6`,
   sprint mult 1.3) so costs match the integrator the boxer actually uses.
-- **Admissible tick-scaled heuristic.** `h = octile_horizontal · SPRINT_ONE_BLOCK`,
-  `0` vertical term (strict underestimate). Now on the same tick scale as edges, so
-  jumpy/parkour routes correctly *lose* to flat sprint routes; A* stays optimal.
+- **3D tick-scaled heuristic (horizontal + vertical).** `h = octile_horizontal ·
+  SPRINT_ONE_BLOCK + verticalTerm`, where `verticalTerm` for an *upward* goal is
+  `Δy_up · JUMP_ONE_BLOCK_COST` (you cannot gain height without paying jump arcs) and
+  for a *downward* goal is ~0 (falling is cheap). Baritone's `GoalBlock` is exactly
+  `GoalXZ + GoalYLevel` for this reason. The vertical term is what makes the search
+  actively *seek elevation* toward a raised target and — critically — stops the
+  `bestSoFar` partial from stalling **directly under** an out-of-reach platform
+  (horizontally close but a dead end). The vertical term is mildly inflated where a
+  diagonal-ascend covers both axes at once, so the search is bounded-suboptimal
+  (weighted-A*, like Baritone) rather than strictly optimal — an acceptable, deliberate
+  trade that favors elevation-seeking and search speed. Flat/downward goals keep the
+  admissible pure-horizontal behavior and jumpy routes still correctly lose to flat
+  sprint routes.
 - **Anytime `bestSoFar` partial path.** Track the node minimizing `h` (optionally
   Baritone's `h + g/coeff` set for tunable greediness). On budget/bound exhaustion,
   reconstruct from `bestSoFar` instead of returning empty (today's empty-on-exhaustion
