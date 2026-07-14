@@ -201,17 +201,16 @@ public final class Brain {
         MoveHeading heading = steering.steer(p, desired, world);
 
         // Advance the stall counter every tick, but only ACT on it when the boxer
-        // is genuinely trying to close on the target (an approach). A deliberate
-        // orbit or a sidestep also makes little net approach, and must never be
-        // "rescued" into a reroute.
+        // is genuinely trying to close on the target FROM A DISTANCE (an approach
+        // through terrain). A deliberate orbit makes little net approach, and a
+        // boxer pressing into a target in the melee pocket is "stuck" only because
+        // entity pushing holds it there — neither must be "rescued" into a detour.
         boolean stuck = antiStuck.isStuck(p, memory);
-        if (!stuck || !isApproaching(p, desired)) {
+        boolean closingFromAfar = p.target() != null && p.target().distance() > 2.5;
+        if (!stuck || !isApproaching(p, desired) || !closingFromAfar) {
             return heading;
         }
-        // No point rerouting once we are basically on top of the target (melee
-        // range) — entity pushing resolves the pocket for a real opponent.
-        boolean worthRerouting = p.target() != null && p.target().distance() > 2.0;
-        if (worthRerouting && antiStuck.shouldReroute(memory) && planRoute(p, world)) {
+        if (antiStuck.shouldReroute(memory) && planRoute(p, world)) {
             MoveHeading routed = followRoute(p, world);
             if (routed != null) {
                 return routed;

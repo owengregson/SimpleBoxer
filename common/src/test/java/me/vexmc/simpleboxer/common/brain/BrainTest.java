@@ -75,6 +75,20 @@ class BrainTest {
     }
 
     @Test
+    void holdsTheMeleePocketWithoutWanderingOff() {
+        // A rush boxer already in the pocket makes ~no net progress (it is pressed
+        // against where the target stands), which must NOT be mistaken for being
+        // stuck and rescued into a sideways detour — it should keep the pocket.
+        FakeWorld world = FakeWorld.floorAt(64);
+        ClientPhysics phys = new ClientPhysics(0, 64, 0);
+        Vec3d target = new Vec3d(2, 64, 0);
+        run(BoxerSettings.DEFAULTS, phys, world, target, 80);
+        assertTrue(horizontalDistance(phys, target) < 2.0,
+                "the boxer held the pocket rather than sidestepping (dist "
+                        + horizontalDistance(phys, target) + ")");
+    }
+
+    @Test
     void circleStrafeHoldsARadiusBandInsteadOfSpirallingIn() {
         FakeWorld world = FakeWorld.floorAt(64);
         BoxerSettings settings = BoxerSettings.DEFAULTS.withMovement(
