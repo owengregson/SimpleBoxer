@@ -41,12 +41,14 @@ public final class GuardSuite {
                     }
                 }),
 
-                new TestCase("guard: a one-shot respawns the boxer in place", context -> {
+                new TestCase("guard: a one-shot burst is survived in place, not fatal", context -> {
                     World world = Bukkit.getWorlds().get(0);
                     Location center = context.sync(() -> Arenas.arena(world, 70, 100));
                     Boxer boxer = Arenas.spawn("Lazarus", center, DifficultyPresets.DUMMY);
                     try {
                         context.awaitTicks(5);
+                        // The fixed invincibility caps an otherwise-lethal hit so the
+                        // boxer never dies (the old restore-next-tick let it die first).
                         context.syncRun(() -> boxer.player().damage(1000.0));
                         context.awaitUntil(() -> {
                             try {
@@ -55,11 +57,11 @@ public final class GuardSuite {
                             } catch (Throwable gone) {
                                 return false;
                             }
-                        }, 40, "the boxer to respawn at full health");
+                        }, 40, "the boxer to survive the burst at full health");
                         double distance = context.sync(() ->
                                 boxer.player().getLocation().distance(center));
                         context.expect(distance < 3.0,
-                                "respawned in place (" + distance + " blocks away)");
+                                "survived in place (" + distance + " blocks away)");
                     } finally {
                         context.syncRun(boxer::remove);
                     }
