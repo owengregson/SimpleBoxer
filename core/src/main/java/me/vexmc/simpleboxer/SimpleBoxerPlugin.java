@@ -3,11 +3,15 @@ package me.vexmc.simpleboxer;
 import me.vexmc.simpleboxer.api.BoxerService;
 import me.vexmc.simpleboxer.boxer.BoxerManager;
 import me.vexmc.simpleboxer.boxer.CombatFeedbackListener;
+import me.vexmc.simpleboxer.boxer.DeathPolicyGuard;
+import me.vexmc.simpleboxer.boxer.ExternalVelocityListener;
+import me.vexmc.simpleboxer.boxer.HungerGuard;
+import me.vexmc.simpleboxer.boxer.InvincibilityGuard;
 import me.vexmc.simpleboxer.boxer.KnockbackListener;
+import me.vexmc.simpleboxer.boxer.PickupListener;
 import me.vexmc.simpleboxer.command.BoxerCommands;
 import me.vexmc.simpleboxer.common.scheduling.Scheduling;
 import me.vexmc.simpleboxer.config.ConfigStore;
-import me.vexmc.simpleboxer.guard.SurvivalGuards;
 import me.vexmc.simpleboxer.gui.ChatPrompts;
 import me.vexmc.simpleboxer.gui.Gui;
 import me.vexmc.simpleboxer.gui.MenuListener;
@@ -72,8 +76,21 @@ public final class SimpleBoxerPlugin extends JavaPlugin {
             boxerCommand.setExecutor(executor);
             boxerCommand.setTabCompleter(executor);
         }
+        // The survival guards, decomposed: proper (burst-proof) invincibility,
+        // death policy (drops + manual/auto respawn), hunger, and item pickup.
         getServer().getPluginManager().registerEvents(
-                new SurvivalGuards(boxerManager, scheduling), this);
+                new InvincibilityGuard(boxerManager, scheduling), this);
+        getServer().getPluginManager().registerEvents(
+                new DeathPolicyGuard(boxerManager), this);
+        getServer().getPluginManager().registerEvents(
+                new HungerGuard(boxerManager, scheduling), this);
+        getServer().getPluginManager().registerEvents(
+                new PickupListener(boxerManager), this);
+        // The unified external-velocity capture: StarEnchants' setVelocity,
+        // Mental's delivery, and vanilla player knockback all arrive here and feed
+        // the boxer's knockback resolver (which dedups them against the wire).
+        getServer().getPluginManager().registerEvents(
+                new ExternalVelocityListener(boxerManager), this);
         getServer().getPluginManager().registerEvents(
                 new BoxerJoinListener(boxerManager, boxerManager.tabConcealer(), scheduling), this);
         getServer().getPluginManager().registerEvents(

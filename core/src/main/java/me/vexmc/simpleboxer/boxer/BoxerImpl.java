@@ -7,8 +7,11 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.logging.Logger;
 import me.vexmc.simpleboxer.api.Boxer;
 import me.vexmc.simpleboxer.api.Loadout;
-import me.vexmc.simpleboxer.common.aim.AimSpring;
-import me.vexmc.simpleboxer.common.combat.ClickScheduler;
+import me.vexmc.simpleboxer.common.brain.Brain;
+import me.vexmc.simpleboxer.common.brain.BrainOutput;
+import me.vexmc.simpleboxer.common.brain.Intent.ActionIntent;
+import me.vexmc.simpleboxer.common.brain.Perception;
+import me.vexmc.simpleboxer.common.knockback.KnockbackResolver;
 import me.vexmc.simpleboxer.common.latency.LatencyLine;
 import me.vexmc.simpleboxer.common.physics.Box;
 import me.vexmc.simpleboxer.common.physics.ClientPhysics;
@@ -21,21 +24,26 @@ import me.vexmc.simpleboxer.nms.NmsBridge;
 import me.vexmc.simpleboxer.nms.PacketIO;
 import org.bukkit.GameMode;
 import org.bukkit.Location;
+import org.bukkit.attribute.Attribute;
+import org.bukkit.attribute.AttributeInstance;
 import org.bukkit.entity.Player;
+import org.bukkit.inventory.ItemStack;
+import org.bukkit.inventory.PlayerInventory;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 /**
- * One live boxer: the ServerPlayer handle, the client emulator, and the two
- * latency lines between them. Everything here runs on the boxer's owning
- * thread except {@code outbound}, which the capture handler feeds from
- * whatever thread the server writes on.
+ * One live boxer: the ServerPlayer handle, the client emulator, the utility-AI
+ * brain, and the two latency lines between them. Everything here runs on the
+ * boxer's owning thread except {@code outbound} (fed by the capture handler) and
+ * the knockback listeners, which only enqueue.
  *
- * <p>The loop each tick: drain matured clientbound packets into the client
- * state (velocity REPLACES motion, teleports confirm + snap, explosions
- * ADD) → decide input from the perceived world → step the physics → queue
- * the resulting movement through the action line → dispatch matured actions
- * through the boxer's own game listener → tick the ServerPlayer.</p>
+ * <p>The loop each tick: drain matured clientbound packets → resolve the winning
+ * velocity into the client state → build the delayed {@link Perception} → run the
+ * {@link Brain} for a {@link BrainOutput} (move input, aim, actions) → step the
+ * physics → queue movement → dispatch matured actions → tick the ServerPlayer.
+ * The brain lands behind exactly three seams (the move input, the aim angles, and
+ * the action list) so every packet/physics/latency invariant is unchanged.</p>
  */
 final class BoxerImpl implements Boxer {
 
@@ -51,7 +59,6 @@ final class BoxerImpl implements Boxer {
     private NmsBridge.SpawnedPlayer spawned;
     private final BukkitCollisionView collisionView;
     private final ClientPhysics physics;
-    private final AimSpring aim;
     /** True where the server entity-ticks the boxer for us (Folia regions). */
     private final boolean serverTicksEntity;
     /**
@@ -62,6 +69,22 @@ final class BoxerImpl implements Boxer {
      */
     private final boolean eventBasedKnockback;
 
+    /** The whole decision brain (utility arbiter, aim spring, motor, clicks). */
+    private final Brain brain;
+    /** The single, ranked, deduplicated authority for received velocity. */
+    private final KnockbackResolver knockback = new KnockbackResolver();
+    private final KnockbackResolver.PhysicsSink physicsSink = new KnockbackResolver.PhysicsSink() {
+        @Override
+        public void applyVelocity(double x, double y, double z) {
+            physics.applyVelocity(x, y, z);
+        }
+
+        @Override
+        public void addVelocity(double x, double y, double z) {
+            physics.addVelocity(x, y, z);
+        }
+    };
+
     /** Clientbound packets, fed cross-thread by the capture handler. */
     private final LatencyLine<CapturedPacket> outbound = new LatencyLine<>();
     /** Decided actions on their way to the server (the other half of RTT). */
@@ -70,44 +93,45 @@ final class BoxerImpl implements Boxer {
     private final LatencyLine<TargetView> perception = new LatencyLine<>();
     /** Own attributes/effects aging in like UpdateAttributes packets would. */
     private final LatencyLine<PlayerTraits.Traits> traits = new LatencyLine<>();
-    /** Server-applied knockback (EntityKnockbackEvent), aged like a velocity packet. */
-    private final LatencyLine<Vec3d> receivedKnockback = new LatencyLine<>();
-
-    private final ClickScheduler clicker;
 
     private volatile BoxerSettings settings;
     private volatile @Nullable Player target;
     private volatile boolean paused;
     private final AtomicBoolean removed = new AtomicBoolean(false);
 
+    /** ALIVE, or AWAITING_RESPAWN after a manual death until {@link #respawn()}. */
+    private volatile State state = State.ALIVE;
+    private volatile boolean respawnRequested;
+    private volatile @Nullable Location deathSpot;
+
     /**
      * The boxer's worn kit. Published from any thread (API/GUI); applied to the
-     * real {@code EntityEquipment} on the owning thread when {@code loadoutDirty}
-     * is set, so equipment writes never race the brain or a Folia region tick.
+     * real inventory on the owning thread when {@code loadoutDirty} is set, so
+     * equipment writes never race the brain or a Folia region tick.
      */
     private volatile Loadout loadout;
     private volatile boolean loadoutDirty;
-    /** Set by {@link #retune}; the owning thread re-tunes the aim/click state. */
+    /** Set by {@link #retune}; the owning thread re-tunes the brain. */
     private volatile boolean settingsDirty;
 
     /** What the boxer believes about its target — one perception-delay old. */
     private record TargetView(double x, double y, double z, double eyeY,
-            @NotNull Player entity) {}
+            double vx, double vz, float yaw, boolean blocking, @NotNull Player entity) {}
 
     private @Nullable TargetView perceived;
+    /** Previous matured target yaw, for the opponent-aim tracking-rate estimate. */
+    private float prevTargetYaw;
+    private boolean hasPrevTargetYaw;
 
-    /* W-tap state machine: countdown to release, then released ticks. */
-    private int wtapCountdown = -1;
-    private int wtapReleaseLeft;
-
-    /* Strafe state: current direction and ticks until the next flip. */
-    private double strafeSign = 1.0;
-    private int strafeFlipIn;
-
-    /* Consecutive ticks the target has stood above an auto-step. A single jump
-     * keeps an opponent ~8 ticks above us; only a sustained rise is terrain. */
-    private int climbTicks;
-    private static final int CLIMB_SUSTAIN_TICKS = 10;
+    /** The crosshair the brain drove this tick — used for move packets + item use. */
+    private float aimYaw;
+    private float aimPitch;
+    /** Whether an item is currently being used (block/eat/rod hold), for perception. */
+    private boolean usingItem;
+    /** Per-boxer block-change sequence for use-item packets (1.19+). */
+    private int useSequence;
+    /** A monotonic tick counter grouping knockback samples that share a server tick. */
+    private long serverTick;
 
     private double lastSentX;
     private double lastSentY;
@@ -146,6 +170,12 @@ final class BoxerImpl implements Boxer {
         record Attack(@NotNull Player victim) implements Action {}
 
         record Swing() implements Action {}
+
+        record SelectSlot(int slot) implements Action {}
+
+        record UseItem(boolean mainHand) implements Action {}
+
+        record ReleaseUse() implements Action {}
 
         record KeepAlive(long id) implements Action {}
     }
@@ -186,11 +216,12 @@ final class BoxerImpl implements Boxer {
         this.collisionView = new BukkitCollisionView(spawnLocation.getWorld());
         this.physics = new ClientPhysics(
                 spawnLocation.getX(), spawnLocation.getY(), spawnLocation.getZ());
-        this.aim = new AimSpring(settings.aim(), spawnLocation.getYaw(), spawnLocation.getPitch());
-        // Seeded by identity: identical boxers click identically — a
+        // Seeded by identity: identical boxers decide identically — a
         // deterministic fixture is a debuggable fixture.
-        this.clicker = new ClickScheduler(settings.cps(), settings.clickJitter(),
-                uuid.getLeastSignificantBits());
+        this.brain = new Brain(settings, uuid.getLeastSignificantBits(),
+                spawnLocation.getYaw(), spawnLocation.getPitch());
+        this.aimYaw = spawnLocation.getYaw();
+        this.aimPitch = spawnLocation.getPitch();
         this.lastSentX = spawnLocation.getX();
         this.lastSentY = spawnLocation.getY();
         this.lastSentZ = spawnLocation.getZ();
@@ -206,10 +237,21 @@ final class BoxerImpl implements Boxer {
     /**
      * The boxer's owning thread, from {@code EntityKnockbackEvent}: the full
      * post-knockback velocity the server computed, before its own tick can decay
-     * it. Aged through the perception line and applied like a velocity packet.
+     * it. Offered to the resolver on the MELEE_KB channel.
      */
     void onKnockback(double vx, double vy, double vz) {
-        receivedKnockback.offer(new Vec3d(vx, vy, vz), System.nanoTime());
+        knockback.offer(KnockbackResolver.Channel.MELEE_KB, vx, vy, vz, serverTick, System.nanoTime());
+    }
+
+    /**
+     * Any server-side velocity a plugin (Mental's delivery, StarEnchants, vanilla)
+     * applies through {@code PlayerVelocityEvent}: the FINAL absolute value Bukkit
+     * will apply. This is the previously-lost signal for a viewerless boxer on
+     * modern Paper. Offered on the highest-authority PLAYER_VELOCITY channel.
+     */
+    void onExternalVelocity(double vx, double vy, double vz) {
+        knockback.offer(KnockbackResolver.Channel.PLAYER_VELOCITY, vx, vy, vz,
+                serverTick, System.nanoTime());
     }
 
     /* ------------------------------------------------------------------ */
@@ -221,50 +263,37 @@ final class BoxerImpl implements Boxer {
             return;
         }
         refreshHandleAfterRespawn();
-        // Apply freshly published settings on the owning thread — the brain's
-        // aim spring and click clock are plain stateful objects this tick reads,
-        // so retune() only publishes the volatile snapshot and the actual
-        // mutation happens HERE, never racing a GUI thread on Folia.
         if (settingsDirty) {
             settingsDirty = false;
-            aim.retune(settings.aim());
-            clicker.retune(settings.cps(), settings.clickJitter());
+            brain.retune(settings);
         }
-        // Apply a freshly published kit on the owning thread — equipment writes
-        // (and the PlayerArmorChangeEvent they fire, which custom-enchant
-        // plugins listen for) must never race the brain or a region tick. Clear
-        // the flag before applying (the latest volatile loadout is what lands);
-        // a transient write failure re-arms it so the next tick retries.
         if (loadoutDirty) {
             loadoutDirty = false;
-            if (!applyLoadout()) {
+            if (!syncKit()) {
                 loadoutDirty = true;
             }
         }
-        // Where the server entity-ticks the boxer for us, the region's own
-        // doTick has travelled the body (gravity, residual knockback) since our
-        // last tick. Undo that drift up front so the server position follows
-        // ONLY our move packets — but adopt a large change, which is a real
-        // server-driven reposition (a teleport or respawn), not tick drift.
         if (serverTicksEntity && hasAnchor) {
             reanchorServerPosition();
         }
         long now = System.nanoTime();
         long oneWay = TimeUnit.MILLISECONDS.toNanos(settings.pingMs()) / 2;
+        serverTick++;
 
-        // 1. Perceive: matured clientbound packets become client state, and
-        //    a fresh world snapshot starts aging toward the brain.
+        // A dead boxer awaiting a manual respawn: only keep the connection alive.
+        if (state == State.AWAITING_RESPAWN) {
+            keepaliveOnly(now, oneWay);
+            return;
+        }
+
+        // 1. Perceive: matured clientbound packets become client state, then the
+        //    resolver applies the single winning velocity into the sim.
         for (CapturedPacket captured : outbound.drain(now, oneWay)) {
             for (Inbound inbound : packetIO.recognize(captured.packet())) {
                 route(inbound, now);
             }
         }
-        // Knockback the server applied to us, captured at full strength from
-        // EntityKnockbackEvent and aged like the velocity packet a real client
-        // would receive. REPLACES motion, exactly as a velocity packet does.
-        for (Vec3d knockback : receivedKnockback.drain(now, oneWay)) {
-            physics.applyVelocity(knockback.x(), knockback.y(), knockback.z());
-        }
+        knockback.resolve(now, oneWay, physicsSink);
         snapshotTarget(now);
         TargetView matured = perception.drainLatest(now, oneWay);
         if (matured != null) {
@@ -273,10 +302,6 @@ final class BoxerImpl implements Boxer {
         if (perceived != null && !perceived.entity().isOnline()) {
             perceived = null;
         }
-        // Self-knowledge rides the same delayed wire: Speed/Slowness (the
-        // movement-speed attribute, from any source) and Jump Boost reach a
-        // real client as packets, so they reach the integrator through the
-        // perception delay too.
         traits.offer(PlayerTraits.read(spawned.player()), now);
         PlayerTraits.Traits knownTraits = traits.drainLatest(now, oneWay);
         if (knownTraits != null) {
@@ -284,18 +309,24 @@ final class BoxerImpl implements Boxer {
             physics.setJumpBoostAmplifier(knownTraits.jumpBoostAmplifier());
         }
 
-        // 2. Decide + integrate, unless paused (a paused client still
-        //    receives packets — knockback flies you around while AFK too).
-        MoveInput input = paused ? MoveInput.IDLE : decideInput();
-        queueInput(input, now);
-        if (!paused) {
-            considerClicking(now);
+        // 2. Decide via the brain, unless paused (a paused client still receives
+        //    packets — knockback flies you around while AFK too).
+        MoveInput input;
+        if (paused) {
+            input = MoveInput.IDLE;
+            syncSprint(false);
+        } else {
+            BrainOutput out = brain.tick(buildPerception(), collisionView, now / 1_000_000L);
+            input = out.move();
+            aimYaw = out.aimYaw();
+            aimPitch = out.aimPitch();
+            for (ActionIntent action : out.actions()) {
+                lowerAction(action, now);
+            }
+            syncSprint(out.sprintDesire());
         }
-        physics.step(input, aim.yaw(), collisionView);
-        // pushEntities, the client-predicted half: vanilla shoves the local
-        // player away from every overlapping body AFTER travel, the delta
-        // riding into the next tick's move. Paused boxers get shoved too —
-        // an AFK body is still a body.
+        queueInput(input, now);
+        physics.step(input, aimYaw, collisionView);
         pushAwayFromNeighbors();
 
         // 3. Report movement the way a real client does.
@@ -306,12 +337,11 @@ final class BoxerImpl implements Boxer {
             dispatch(action);
         }
 
-        // 5. Ship the boxer's own pending knockback BEFORE the tick: doTick's
-        //    travel drags the server motion fields, and a packet synthesized
-        //    after it would carry a once-decayed stamp. Skipped where knockback
-        //    is captured from EntityKnockbackEvent instead (it can't win this
-        //    poll against the region's own tick), and there the live tracker is
-        //    left to broadcast the velocity to viewers itself.
+        // 5. Ship the boxer's own pending knockback BEFORE the tick (classic
+        //    servers): the poll fires PlayerVelocityEvent + broadcasts to viewers,
+        //    and route() offers the resulting velocity to the resolver. Skipped
+        //    where EntityKnockbackEvent owns the capture (it can't win this poll
+        //    against the region's own tick).
         if (!eventBasedKnockback) {
             Object selfVelocity = bridge.drainHurtMarked(spawned.serverPlayer(), spawned.player());
             if (selfVelocity != null) {
@@ -319,19 +349,8 @@ final class BoxerImpl implements Boxer {
             }
         }
 
-        // 6. Tick the ServerPlayer (timers, effects, food — the server half of
-        //    being a player), but ONLY where the server will not do it itself.
-        //    doTick also runs the entity's own travel, displacing the boxer by
-        //    its server motion fields — real players never show this because
-        //    their clients stream absolute positions every tick that overwrite
-        //    it. The boxer's server position must follow ONLY its move packets,
-        //    so any doTick displacement is undone.
+        // 6. Tick the ServerPlayer where the server will not do it itself.
         if (serverTicksEntity) {
-            // The owning region already ticked (or will tick) this entity this
-            // server tick. A second doTick here would double every timer (attack
-            // cooldown, effects, food) and re-travel the body. Just record where
-            // our move packets left the server position; next tick re-anchors to
-            // it, undoing the region's intervening travel.
             Location anchor = spawned.player().getLocation();
             anchorX = anchor.getX();
             anchorY = anchor.getY();
@@ -350,6 +369,29 @@ final class BoxerImpl implements Boxer {
                     logger.warning("[" + name + "] position restore failed: " + failure);
                 }
             }
+        }
+    }
+
+    /**
+     * A dead-and-waiting boxer's minimal tick: answer keep-alives and teleport
+     * acks so the connection survives, and perform the respawn when requested.
+     */
+    private void keepaliveOnly(long now, long oneWay) {
+        for (CapturedPacket captured : outbound.drain(now, oneWay)) {
+            for (Inbound inbound : packetIO.recognize(captured.packet())) {
+                if (inbound instanceof Inbound.KeepAlive keepAlive) {
+                    actions.offer(new Action.KeepAlive(keepAlive.id()), now);
+                } else if (inbound instanceof Inbound.PositionSync sync) {
+                    actions.offer(new Action.AcceptTeleport(sync.teleportId()), now);
+                }
+            }
+        }
+        for (Action action : actions.drain(now, oneWay)) {
+            dispatch(action);
+        }
+        if (respawnRequested) {
+            respawnRequested = false;
+            manager.requestRespawn(this);
         }
     }
 
@@ -398,15 +440,11 @@ final class BoxerImpl implements Boxer {
                 // (the teleport packet also arrives through the normal path).
                 Location location = spawned.player().getLocation();
                 physics.teleport(location.getX(), location.getY(), location.getZ());
-                // Respawn re-armed the server's client-loaded gate; without
-                // a fresh answer the next three seconds of sprint commands
-                // and attacks would be silently dropped.
+                brain.snapAim(location.getYaw(), location.getPitch());
+                aimYaw = location.getYaw();
+                aimPitch = location.getPitch();
                 declareClientLoaded();
                 lastQueuedInput = null; // re-state the keyboard to the new listener
-                // Respawn keeps the inventory (the death intercept sets
-                // keepInventory), but the entity is replaced — re-stamp the kit
-                // so the equipment, and the armor-change events custom enchants
-                // watch, are unmistakably present on the fresh handle.
                 if (!loadout.isEmpty()) {
                     loadoutDirty = true;
                 }
@@ -425,32 +463,28 @@ final class BoxerImpl implements Boxer {
             return;
         }
         Location location = currentTarget.getLocation();
+        org.bukkit.util.Vector velocity = currentTarget.getVelocity();
         perception.offer(new TargetView(location.getX(), location.getY(), location.getZ(),
-                location.getY() + currentTarget.getEyeHeight(), currentTarget), now);
+                location.getY() + currentTarget.getEyeHeight(),
+                velocity.getX(), velocity.getZ(), location.getYaw(),
+                currentTarget.isBlocking(), currentTarget), now);
     }
 
     private void route(@NotNull Inbound inbound, long now) {
         if (inbound instanceof Inbound.Velocity velocity) {
-            if (velocity.entityId() == spawned.entityId() && !eventBasedKnockback) {
-                // When EntityKnockbackEvent owns our knockback, ignore the
-                // tracker's own SetEntityMotion echo for us — it carries the
-                // once-decayed value that would override the full one.
-                if (DEBUG) {
-                    logger.info("[debug " + name + "] velocity applied (" + velocity.vx()
-                            + "," + velocity.vy() + "," + velocity.vz() + ") emuZ=" + physics.z());
-                }
-                physics.applyVelocity(velocity.vx(), velocity.vy(), velocity.vz());
+            if (velocity.entityId() == spawned.entityId()) {
+                // The tracker's own SetEntityMotion echo — a low-authority hint
+                // the resolver ranks below the melee/velocity-event channels.
+                knockback.offer(KnockbackResolver.Channel.MOTION_ECHO,
+                        velocity.vx(), velocity.vy(), velocity.vz(), serverTick, now);
             }
             return;
         }
         if (inbound instanceof Inbound.Explosion explosion) {
-            physics.addVelocity(explosion.kx(), explosion.ky(), explosion.kz());
+            knockback.offerExplosion(explosion.kx(), explosion.ky(), explosion.kz(), serverTick, now);
             return;
         }
         if (inbound instanceof Inbound.KeepAlive keepAlive) {
-            // Echo it back through the action line — a real client answers a
-            // tick or so later (its own ping), and the server only needs the
-            // reply before the next probe ~15 s out.
             actions.offer(new Action.KeepAlive(keepAlive.id()), now);
             return;
         }
@@ -467,177 +501,130 @@ final class BoxerImpl implements Boxer {
                         motion.deltaY() ? velocity.y() + motion.y() : motion.y(),
                         motion.deltaZ() ? velocity.z() + motion.z() : motion.z());
             } else {
-                // Legacy semantics: an absolute teleport axis zeroes that
-                // axis' client motion (why /tp stops momentum).
                 physics.applyVelocity(
                         sync.relativeX() ? velocity.x() : 0.0,
                         sync.relativeY() ? velocity.y() : 0.0,
                         sync.relativeZ() ? velocity.z() : 0.0);
             }
-            float yaw = sync.relativeYaw() ? aim.yaw() + sync.yaw() : sync.yaw();
-            float pitch = sync.relativePitch() ? aim.pitch() + sync.pitch() : sync.pitch();
-            aim.snapTo(yaw, pitch);
-            if (DEBUG) {
-                logger.info("[debug " + name + "] teleport sync id=" + sync.teleportId()
-                        + " -> (" + x + "," + y + "," + z + ")");
-            }
+            float yaw = sync.relativeYaw() ? aimYaw + sync.yaw() : sync.yaw();
+            float pitch = sync.relativePitch() ? aimPitch + sync.pitch() : sync.pitch();
+            brain.snapAim(yaw, pitch);
+            aimYaw = yaw;
+            aimPitch = pitch;
             actions.offer(new Action.AcceptTeleport(sync.teleportId()), now);
         }
     }
 
-    /**
-     * The decision frame, working entirely from the DELAYED target view —
-     * a 100 ms boxer chases where its target was 50 ms ago, aims there,
-     * judges reach there, exactly like the laggy client it emulates.
-     */
-    private @NotNull MoveInput decideInput() {
+    /* ------------------------------------------------------------------ */
+    /*  Perception assembly + action lowering                              */
+    /* ------------------------------------------------------------------ */
+
+    /** Builds the immutable, delayed {@link Perception} the brain reasons over. */
+    private @NotNull Perception buildPerception() {
+        Perception.SelfState self = new Perception.SelfState(
+                physics.x(), physics.y(), physics.z(), physics.velocity(),
+                physics.onGround(), physics.horizontalCollision(),
+                healthPct(), hungerPct(),
+                usingItem ? Perception.UseItemState.USING : Perception.UseItemState.NONE,
+                safeIsBlocking(spawned.player()));
+
+        Perception.TargetState targetState = null;
         TargetView view = perceived;
-        if (view == null) {
-            climbTicks = 0;
-            syncSprint(false);
-            return MoveInput.IDLE;
-        }
-        double dx = view.x() - physics.x();
-        double dz = view.z() - physics.z();
-        double distance = Math.sqrt(dx * dx + dz * dz);
-
-        // Eyes on the perceived chest: yaw from the horizontal bearing,
-        // pitch from eye height to a point just below the target's eyes.
-        float desiredYaw = (float) Math.toDegrees(Math.atan2(-dx, dz));
-        double eyeDy = (view.eyeY() - 0.4) - (physics.y() + 1.62);
-        float desiredPitch = (float) -Math.toDegrees(Math.atan2(eyeDy, Math.max(distance, 1.0E-4)));
-        aim.step(desiredYaw, desiredPitch);
-
-        BoxerSettings current = settings;
-        BoxerSettings.Movement movement = current.movement();
-        if (movement.style() == BoxerSettings.Movement.Style.STAND) {
-            syncSprint(false);
-            return MoveInput.IDLE;
-        }
-
-        // W-tap: the countdown opened by a landed hit expires into a
-        // released-forward window; sprint drops with it and re-arms on the
-        // re-press — the exact packet rhythm of a human w-tapper.
-        if (wtapCountdown > 0) {
-            wtapCountdown--;
-        } else if (wtapCountdown == 0) {
-            wtapCountdown = -1;
-            wtapReleaseLeft = current.wtap().releaseTicks();
-        }
-        if (wtapReleaseLeft > 0) {
-            wtapReleaseLeft--;
-            syncSprint(false);
-            return MoveInput.IDLE;
-        }
-
-        double strafe = strafeInput(movement, distance);
-        // Follow the target up terrain. When it has stood more than an auto-step
-        // (STEP_HEIGHT) above us for long enough to be terrain rather than a
-        // jump, keep advancing into the rise instead of holding range, and hop
-        // (below) while still closing so running momentum carries us over the
-        // lip. Without this the boxer halts at the foot of a block it could have
-        // hopped; gating on a SUSTAINED rise keeps it from lurching every time
-        // the target merely jumps in flat-ground combat.
-        if (view.y() - physics.y() > ClientPhysics.STEP_HEIGHT) {
-            climbTicks++;
-        } else {
-            climbTicks = 0;
-        }
-        boolean climbing = climbTicks >= CLIMB_SUSTAIN_TICKS;
-        // The default ring is 0: the forward key NEVER releases — easing
-        // off in the pocket drops sprint (vanilla needs impulse ≥ 0.8) and
-        // the momentum that survives combos. Entity pushing resolves the
-        // body contact, exactly as it does for a real W-holder. A raised
-        // ring is deliberate range discipline: hold the pocket, back out
-        // when overlapped.
-        boolean inRange = distance <= movement.stopDistance();
-        double forward;
-        if (inRange && !climbing) {
-            forward = distance < movement.stopDistance() - 0.8 ? -0.4 : 0.0;
-        } else {
-            forward = 1.0;
-        }
-
-        boolean sprinting = movement.sprint() && forward > 0.9;
-        syncSprint(sprinting);
-        // Jump to clear terrain. Hopping only once already blocked fails: the
-        // collision has zeroed our horizontal velocity, so we rise straight up
-        // against the step face and drop back down in place. Instead we hop
-        // while still CLOSING on a target above us — leaving the ground with
-        // running momentum intact is what arcs us forward over the block, the
-        // way a player bunny-hops up stairs. The blocked case stays a fallback
-        // for steps met head-on at our own level.
-        boolean jump = physics.onGround() && (physics.horizontalCollision() || climbing);
-        return new MoveInput(forward, strafe, jump, sprinting, false);
-    }
-
-    private double strafeInput(BoxerSettings.Movement movement, double distance) {
-        boolean close = distance <= movement.stopDistance() + 1.5;
-        switch (movement.style()) {
-            case STRAFE_CIRCLE -> {
-                if (!close) {
-                    return 0.0;
-                }
-                // Orbit; flip when the wall interrupts or on a slow cadence.
-                if (--strafeFlipIn <= 0 || physics.horizontalCollision()) {
-                    strafeFlipIn = 40 + (int) (Math.abs(uuid.getMostSignificantBits()) % 25L);
-                    strafeSign = -strafeSign;
-                }
-                return strafeSign;
-            }
-            case STRAFE_WEAVE -> {
-                // Weave on approach and in the pocket alike. Keyboard
-                // impulses are digital — A/D is ±1 or nothing; the weave
-                // personality lives in the flip cadence, never in analog
-                // softening no real client could send.
-                if (--strafeFlipIn <= 0) {
-                    strafeFlipIn = 8 + (int) (Math.abs(uuid.getMostSignificantBits() >> 8) % 7L);
-                    strafeSign = -strafeSign;
-                }
-                return strafeSign;
-            }
-            default -> {
-                return 0.0;
-            }
-        }
-    }
-
-    /**
-     * The clicking finger: CPS-clocked; a click always swings, and lands an
-     * attack only when the perceived target sits inside reach AND inside the
-     * aim cone — out-of-range spam swings at air like any real spammer.
-     * Attack dispatches BEFORE swing: the real client order in every era
-     * (a swing-first bot resets the attack meter on modern servers).
-     */
-    private void considerClicking(long nowNanos) {
-        TargetView view = perceived;
-        if (!clicker.shouldClick(nowNanos / 1_000_000L)) {
-            return;
-        }
-        long now = System.nanoTime();
         if (view != null) {
             double dx = view.x() - physics.x();
-            double dy = (view.y() + 0.9) - (physics.y() + 1.62);
             double dz = view.z() - physics.z();
-            double reachSq = settings.reach() * settings.reach();
-            boolean inReach = dx * dx + dy * dy + dz * dz <= reachSq;
-            float desiredYaw = (float) Math.toDegrees(Math.atan2(-dx, dz));
-            boolean aimed = aim.yawErrorTo(desiredYaw) <= settings.aimToleranceDegrees();
-            if (inReach && aimed) {
+            double distance = Math.sqrt(dx * dx + dz * dz);
+            double bearingToMe = Math.toDegrees(Math.atan2(-(physics.x() - view.x()),
+                    (physics.z() - view.z())));
+            double trackRate = 0.0;
+            if (hasPrevTargetYaw) {
+                trackRate = Math.abs(wrapDegrees(view.yaw() - prevTargetYaw));
+            }
+            prevTargetYaw = view.yaw();
+            hasPrevTargetYaw = true;
+            targetState = new Perception.TargetState(view.x(), view.y(), view.z(), view.eyeY(),
+                    new Vec3d(view.vx(), 0.0, view.vz()), bearingToMe, trackRate, distance, view.blocking());
+        } else {
+            hasPrevTargetYaw = false;
+        }
+
+        return new Perception(self, targetState, Perception.TerrainView.OPEN,
+                inventoryView(), new Perception.CombatState(attackMeter(), false, serverTick),
+                settings.pingMs());
+    }
+
+    private @NotNull Perception.InventoryView inventoryView() {
+        BoxerSettings.Items items = settings.items();
+        PlayerInventory inventory = spawned.player().getInventory();
+        boolean hasSword = ItemCategory.is(slot(inventory, items.weaponSlot()), ItemCategory.WEAPON);
+        boolean hasRod = ItemCategory.is(slot(inventory, items.rodSlot()), ItemCategory.ROD);
+        boolean hasPots = ItemCategory.is(slot(inventory, items.potSlot()), ItemCategory.POTION);
+        boolean hasFood = ItemCategory.is(slot(inventory, items.foodSlot()), ItemCategory.FOOD);
+        boolean hasShield = ItemCategory.is(inventory.getItemInOffHand(), ItemCategory.SHIELD)
+                || ItemCategory.is(slot(inventory, items.blockSlot()), ItemCategory.SHIELD);
+        return new Perception.InventoryView(hasSword, hasRod, hasPots, hasFood, hasShield,
+                inventory.getHeldItemSlot());
+    }
+
+    private static @Nullable ItemStack slot(PlayerInventory inventory, int hotbarSlot) {
+        return hotbarSlot >= 0 && hotbarSlot <= 8 ? inventory.getItem(hotbarSlot) : null;
+    }
+
+    /** Lowers one brain {@link ActionIntent} onto the action latency line. */
+    private void lowerAction(@NotNull ActionIntent action, long now) {
+        if (action instanceof ActionIntent.Attack) {
+            TargetView view = perceived;
+            if (view != null && view.entity().isOnline()) {
                 actions.offer(new Action.Attack(view.entity()), now);
             }
+        } else if (action instanceof ActionIntent.Swing) {
+            actions.offer(new Action.Swing(), now);
+        } else if (action instanceof ActionIntent.SelectSlot select) {
+            actions.offer(new Action.SelectSlot(select.slot()), now);
+        } else if (action instanceof ActionIntent.StartUse use) {
+            actions.offer(new Action.UseItem(use.mainHand()), now);
+        } else if (action instanceof ActionIntent.ReleaseUse) {
+            actions.offer(new Action.ReleaseUse(), now);
         }
-        actions.offer(new Action.Swing(), now);
+    }
+
+    private double healthPct() {
+        try {
+            double max = maxHealth(spawned.player());
+            return max <= 0 ? 1.0 : Math.max(0.0, Math.min(1.0, spawned.player().getHealth() / max));
+        } catch (Throwable unsupported) {
+            return 1.0;
+        }
+    }
+
+    private double hungerPct() {
+        try {
+            return Math.max(0.0, Math.min(1.0, spawned.player().getFoodLevel() / 20.0));
+        } catch (Throwable unsupported) {
+            return 1.0;
+        }
+    }
+
+    private double attackMeter() {
+        try {
+            return spawned.player().getAttackCooldown();
+        } catch (Throwable unsupported) {
+            return 1.0;
+        }
+    }
+
+    private static boolean safeIsBlocking(Player player) {
+        try {
+            return player.isBlocking();
+        } catch (Throwable unsupported) {
+            return false;
+        }
     }
 
     /**
-     * The client-predicted half of pushEntities: the shove away from every
-     * player whose box overlaps ours. Each party computes only its own half
-     * (a real neighbour's client — or boxer brain — computes theirs), which
-     * is why a W-holder bulldozes an AFK body instead of clipping through
-     * it. Live server positions stand in for the interpolated remotes a
-     * real client pushes against — entity interpolation is the one wire
-     * detail the brain does not model.
+     * The client-predicted half of pushEntities: the shove away from every player
+     * whose box overlaps ours. Each party computes only its own half, which is why
+     * a W-holder bulldozes an AFK body instead of clipping through it.
      */
     private void pushAwayFromNeighbors() {
         Box self = physics.boundingBox();
@@ -659,23 +646,14 @@ final class BoxerImpl implements Boxer {
 
     /** A hit this boxer threw landed (server confirmation, owning thread). */
     void onHitLanded() {
-        // Vanilla's sprint-attack proc, read exactly where attack() reads
-        // it: the damage event fires INSIDE hurt(), so the sprint flag and
-        // the attack meter still show their pre-clear values here. On a
-        // proc the attacker's own motion multiplies ×0.6 horizontally and
-        // the server clears its sprint flag (syncSprint's reconcile
-        // re-arms it next tick, the toggle-sprint client rhythm). Under
-        // OCM's restored 1.8 hit speed every spam click is full-meter, so
-        // this fires per landed hit — exactly as it did for era players.
-        // (The slow lands one brain tick after a zero-ping client would
-        // apply it — the click decision predates this tick's travel.)
+        // Vanilla's sprint-attack proc: a full-meter sprint hit multiplies the
+        // attacker's own horizontal motion ×0.6 and clears its sprint flag
+        // (syncSprint re-arms it). Read exactly where attack() reads it — the
+        // damage event fires inside hurt(), so the flag/meter still read pre-clear.
         if (serverSprinting && attackMeterFull()) {
             physics.multiplyHorizontalVelocity(0.6);
         }
-        BoxerSettings.WTap wtap = settings.wtap();
-        if (wtap.enabled() && wtapReleaseLeft == 0 && wtapCountdown < 0) {
-            wtapCountdown = wtap.delayTicks();
-        }
+        brain.onHitLanded();
     }
 
     /** attack()'s meter gate: getAttackStrengthScale(0.5) > 0.9. */
@@ -683,20 +661,16 @@ final class BoxerImpl implements Boxer {
         try {
             return spawned.player().getAttackCooldown() > 0.9f;
         } catch (Throwable unsupported) {
-            // No meter API → treat as the legacy always-full meter.
             return true;
         }
     }
 
     /**
-     * Sprint state changes ship as the real PlayerCommand packets. The
-     * cache reconciles against server truth first: vanilla clears the
-     * ATTACKER's sprint flag on every full-meter sprint hit (and a respawn
-     * resets it), and a real toggle-sprint client re-arms from its own
-     * prediction with a fresh START_SPRINTING — a stale cache would leave
-     * the boxer permanently unsprinting after its first punch on restored
-     * 1.8 hit speed. The in-flight guard keeps a high-ping boxer from
-     * re-sending while its previous command is still in transit.
+     * Sprint state changes ship as the real PlayerCommand packets. The cache
+     * reconciles against server truth first (vanilla clears the sprint flag on a
+     * full-meter sprint hit; a respawn resets it), then re-sends START_SPRINTING
+     * exactly like a toggle-sprint client's auto re-arm. The in-flight guard keeps
+     * a high-ping boxer from re-sending while its previous command is in transit.
      */
     private void syncSprint(boolean sprinting) {
         if (sprintActionsInFlight == 0 && serverSprinting
@@ -713,10 +687,7 @@ final class BoxerImpl implements Boxer {
 
     /**
      * The whole-keyboard state, queued on change — the exact rhythm a real
-     * 1.21.2+ client ships its {@code player_input} packets with. The server
-     * fires {@code PlayerInputEvent} from it and steers vehicles by it;
-     * below 1.21.2 the factory resolves to nothing and no packet exists to
-     * send. Strafe is vanilla's left-positive convention on both sides.
+     * 1.21.2+ client ships its {@code player_input} packets with.
      */
     private void queueInput(@NotNull MoveInput input, long now) {
         Action.Input flags = new Action.Input(
@@ -730,13 +701,7 @@ final class BoxerImpl implements Boxer {
         actions.offer(flags, now);
     }
 
-    /**
-     * Answers the client-loaded handshake. 1.21.4+ servers arm a 60-tick
-     * gate at listener construction and re-arm it on every respawn; until
-     * the answer (or the timeout) arrives, sprint commands, interactions
-     * and movement are silently dropped. A real client answers as soon as
-     * its level renders — for a spawned brain that is immediately.
-     */
+    /** Answers the client-loaded handshake (1.21.4+); see the class javadoc. */
     void declareClientLoaded() {
         try {
             Object packet = packetIO.playerLoaded();
@@ -752,18 +717,14 @@ final class BoxerImpl implements Boxer {
         double x = physics.x();
         double y = physics.y();
         double z = physics.z();
-        float yaw = aim.yaw();
-        float pitch = aim.pitch();
+        float yaw = aimYaw;
+        float pitch = aimPitch;
         boolean moved = Math.abs(x - lastSentX) > 2.0E-4
                 || Math.abs(y - lastSentY) > 2.0E-4
                 || Math.abs(z - lastSentZ) > 2.0E-4;
         boolean rotated = Math.abs(yaw - lastSentYaw) > 1.0E-3
                 || Math.abs(pitch - lastSentPitch) > 1.0E-3;
         if (moved || rotated || ++idleMoveTicks >= 20) {
-            if (DEBUG && moved) {
-                logger.info("[debug " + name + "] move queued z=" + z
-                        + " server=" + spawned.player().getLocation().getZ());
-            }
             idleMoveTicks = 0;
             actions.offer(new Action.Move(x, y, z, yaw, pitch,
                     physics.onGround(), physics.horizontalCollision(), moved, rotated), now);
@@ -790,10 +751,6 @@ final class BoxerImpl implements Boxer {
                 packetIO.dispatch(
                         packetIO.sprint(spawned.serverPlayer(), spawned.entityId(), sprint.start()),
                         spawned.gameListener());
-                if (DEBUG) {
-                    logger.info("[debug " + name + "] sprint cmd " + sprint.start()
-                            + " -> live=" + spawned.player().isSprinting());
-                }
             } else if (action instanceof Action.Input input) {
                 Object packet = packetIO.playerInput(
                         input.forward(), input.backward(), input.left(), input.right(),
@@ -802,9 +759,6 @@ final class BoxerImpl implements Boxer {
                     packetIO.dispatch(packet, spawned.gameListener());
                 }
             } else if (action instanceof Action.AcceptTeleport accept) {
-                if (DEBUG) {
-                    logger.info("[debug " + name + "] accept dispatched id=" + accept.id());
-                }
                 packetIO.dispatch(packetIO.acceptTeleport(accept.id()), spawned.gameListener());
             } else if (action instanceof Action.Attack attack) {
                 if (attack.victim().isOnline()) {
@@ -812,6 +766,23 @@ final class BoxerImpl implements Boxer {
                 }
             } else if (action instanceof Action.Swing) {
                 packetIO.dispatch(packetIO.swing(), spawned.gameListener());
+            } else if (action instanceof Action.SelectSlot select) {
+                Object packet = packetIO.setCarriedItem(select.slot());
+                if (packet != null) {
+                    packetIO.dispatch(packet, spawned.gameListener());
+                }
+            } else if (action instanceof Action.UseItem use) {
+                Object packet = packetIO.useItem(use.mainHand(), ++useSequence, aimYaw, aimPitch);
+                if (packet != null) {
+                    packetIO.dispatch(packet, spawned.gameListener());
+                    usingItem = true;
+                }
+            } else if (action instanceof Action.ReleaseUse) {
+                Object packet = packetIO.releaseUseItem(++useSequence);
+                if (packet != null) {
+                    packetIO.dispatch(packet, spawned.gameListener());
+                }
+                usingItem = false;
             } else if (action instanceof Action.KeepAlive keepAlive) {
                 Object response = packetIO.keepAliveResponse(keepAlive.id());
                 if (response != null) {
@@ -821,6 +792,30 @@ final class BoxerImpl implements Boxer {
         } catch (Throwable failure) {
             logger.warning("[" + name + "] action dispatch failed: " + failure);
         }
+    }
+
+    /* ------------------------------------------------------------------ */
+    /*  Lifecycle (manual death / respawn)                                 */
+    /* ------------------------------------------------------------------ */
+
+    /** Manager/guard-internal: the boxer died under manual-death and is waiting. */
+    void markAwaitingRespawn(@NotNull Location deathSpot) {
+        this.deathSpot = deathSpot.clone();
+        this.state = State.AWAITING_RESPAWN;
+    }
+
+    /** Manager-internal: the boxer has been respawned and is live again. */
+    void markAlive() {
+        this.state = State.ALIVE;
+        this.respawnRequested = false;
+        this.knockback.clear();
+        if (!loadout.isEmpty()) {
+            this.loadoutDirty = true;
+        }
+    }
+
+    @Nullable Location deathSpot() {
+        return deathSpot;
     }
 
     /* ------------------------------------------------------------------ */
@@ -849,8 +844,6 @@ final class BoxerImpl implements Boxer {
 
     @Override
     public void retune(@NotNull BoxerSettings newSettings) {
-        // Publish only — the aim spring and click clock are mutated on the
-        // owning thread in tick() (settingsDirty), never from a GUI thread.
         this.settings = newSettings;
         this.settingsDirty = true;
     }
@@ -876,54 +869,6 @@ final class BoxerImpl implements Boxer {
         this.loadoutDirty = true;
     }
 
-    /**
-     * Writes the kit onto the boxer's real equipment — the owning thread only
-     * (called from {@link #tick()}). Setting through the Bukkit inventory is
-     * what makes the gear vanilla-real: armor and weapon attributes register on
-     * the {@code ServerPlayer}, the change broadcasts to viewers through the
-     * entity tracker, and {@code PlayerArmorChangeEvent} fires for the
-     * custom-enchant plugins that key passive effects off equipped armor.
-     *
-     * <p>The equipped copies are stamped Unbreakable: an invincible boxer fights
-     * forever, and durability is never cancelled by the survival guards, so a
-     * mortal kit would silently wear out and break mid-fight — taking its
-     * custom-enchant passives with it. The operator's own items are untouched
-     * (the loadout accessors already return clones).</p>
-     *
-     * @return true if the whole kit was written; false on a transient failure,
-     *         which re-arms the dirty flag for a retry next tick.
-     */
-    private boolean applyLoadout() {
-        Loadout kit = loadout;
-        try {
-            org.bukkit.inventory.PlayerInventory inventory = spawned.player().getInventory();
-            inventory.setHelmet(durable(kit.helmet()));
-            inventory.setChestplate(durable(kit.chestplate()));
-            inventory.setLeggings(durable(kit.leggings()));
-            inventory.setBoots(durable(kit.boots()));
-            inventory.setItemInMainHand(durable(kit.mainHand()));
-            inventory.setItemInOffHand(durable(kit.offHand()));
-            return true;
-        } catch (Throwable failure) {
-            logger.warning("[" + name + "] equipping the loadout failed: " + failure);
-            return false;
-        }
-    }
-
-    /** Stamp a kit piece Unbreakable so a tireless fixture's gear never wears out. */
-    private static @Nullable org.bukkit.inventory.ItemStack durable(
-            @Nullable org.bukkit.inventory.ItemStack item) {
-        if (item == null) {
-            return null;
-        }
-        org.bukkit.inventory.meta.ItemMeta meta = item.getItemMeta();
-        if (meta != null) {
-            meta.setUnbreakable(true);
-            item.setItemMeta(meta);
-        }
-        return item;
-    }
-
     @Override
     public boolean paused() {
         return paused;
@@ -940,8 +885,90 @@ final class BoxerImpl implements Boxer {
     }
 
     @Override
+    public @NotNull State state() {
+        return state;
+    }
+
+    @Override
+    public void respawn() {
+        if (state == State.AWAITING_RESPAWN) {
+            this.respawnRequested = true;
+        }
+    }
+
+    @Override
     public void remove() {
         manager.remove(this);
+    }
+
+    /**
+     * Writes the operator kit onto the boxer's real inventory (owning thread). The
+     * four armor slots and the offhand are stamped every dirty tick; the hotbar
+     * weapon lands in the configured weapon slot. To avoid clobbering items the
+     * boxer picked up, only the operator-declared slots are written — a picked-up
+     * item in an untouched slot survives. In {@code lockLoadout} mode the classic
+     * per-tick re-stamp is restored (a pure fixture whose gear never changes).
+     *
+     * @return true if the kit was written; false on a transient failure (retried).
+     */
+    private boolean syncKit() {
+        Loadout kit = loadout;
+        try {
+            PlayerInventory inventory = spawned.player().getInventory();
+            inventory.setHelmet(durable(kit.helmet()));
+            inventory.setChestplate(durable(kit.chestplate()));
+            inventory.setLeggings(durable(kit.leggings()));
+            inventory.setBoots(durable(kit.boots()));
+            inventory.setItemInOffHand(durable(kit.offHand()));
+            // The main-hand kit item goes to the configured weapon slot; the boxer
+            // selects hotbar slots itself via SetCarriedItem, so we don't force
+            // the selected slot here (that would fight a mid-fight rod/pot swap).
+            ItemStack main = durable(kit.mainHand());
+            if (main != null || settings.items().lockLoadout()) {
+                inventory.setItem(settings.items().weaponSlot(), main);
+            }
+            return true;
+        } catch (Throwable failure) {
+            logger.warning("[" + name + "] equipping the loadout failed: " + failure);
+            return false;
+        }
+    }
+
+    /** Stamp a kit piece Unbreakable so a tireless fixture's gear never wears out. */
+    private static @Nullable ItemStack durable(@Nullable ItemStack item) {
+        if (item == null) {
+            return null;
+        }
+        org.bukkit.inventory.meta.ItemMeta meta = item.getItemMeta();
+        if (meta != null) {
+            meta.setUnbreakable(true);
+            item.setItemMeta(meta);
+        }
+        return item;
+    }
+
+    @SuppressWarnings("deprecation") // GENERIC_MAX_HEALTH rename across the range
+    private static double maxHealth(Player player) {
+        for (Attribute attribute : Attribute.values()) {
+            if (attribute.name().contains("MAX_HEALTH")) {
+                AttributeInstance instance = player.getAttribute(attribute);
+                if (instance != null) {
+                    return instance.getValue();
+                }
+            }
+        }
+        return 20.0;
+    }
+
+    private static float wrapDegrees(float degrees) {
+        float wrapped = degrees % 360.0f;
+        if (wrapped >= 180.0f) {
+            wrapped -= 360.0f;
+        }
+        if (wrapped < -180.0f) {
+            wrapped += 360.0f;
+        }
+        return wrapped;
     }
 
     /** Manager-internal: the actual despawn, on the owning thread. */
@@ -950,6 +977,7 @@ final class BoxerImpl implements Boxer {
             bridge.remove(spawned, quitMessage);
             outbound.clear();
             actions.clear();
+            knockback.clear();
         }
     }
 

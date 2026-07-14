@@ -61,14 +61,19 @@ public final class KnockbackResolver {
 
     private final List<Sample> pending = new ArrayList<>();
 
-    /** Stage a REPLACE sample on {@code channel}, captured at {@code nanos} for {@code serverTick}. */
-    public void offer(@NotNull Channel channel, double x, double y, double z,
+    /**
+     * Stage a REPLACE sample on {@code channel}, captured at {@code nanos} for
+     * {@code serverTick}. Synchronised: although a boxer's knock is normally
+     * applied on its own region thread, a plugin's velocity event can land from
+     * another thread, and {@link #resolve} drains concurrently.
+     */
+    public synchronized void offer(@NotNull Channel channel, double x, double y, double z,
             long serverTick, long nanos) {
         add(new Sample(channel.rank, false, x, y, z, serverTick, nanos));
     }
 
     /** Stage an explosion knockback (ADD lane) for {@code serverTick}. */
-    public void offerExplosion(double x, double y, double z, long serverTick, long nanos) {
+    public synchronized void offerExplosion(double x, double y, double z, long serverTick, long nanos) {
         add(new Sample(-1, true, x, y, z, serverTick, nanos));
     }
 
@@ -89,7 +94,7 @@ public final class KnockbackResolver {
      * sample is still maturing, so a higher-rank straggler for the same hit
      * (offered a hair later) is never missed by applying too early.</p>
      */
-    public void resolve(long now, long oneWayNanos, @NotNull PhysicsSink sink) {
+    public synchronized void resolve(long now, long oneWayNanos, @NotNull PhysicsSink sink) {
         if (pending.isEmpty()) {
             return;
         }
@@ -148,7 +153,7 @@ public final class KnockbackResolver {
     }
 
     /** Drop all staged samples (despawn/respawn). */
-    public void clear() {
+    public synchronized void clear() {
         pending.clear();
     }
 }

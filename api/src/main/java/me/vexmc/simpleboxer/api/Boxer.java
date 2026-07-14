@@ -50,6 +50,24 @@ public interface Boxer {
 
     void resume();
 
+    /** A boxer's lifecycle: alive, or dead and waiting for a manual respawn. */
+    enum State {
+        ALIVE,
+        AWAITING_RESPAWN
+    }
+
+    /**
+     * {@link State#ALIVE} normally; {@link State#AWAITING_RESPAWN} after the boxer
+     * died under manual-death survival mode and before {@link #respawn()} is called.
+     */
+    @NotNull State state();
+
+    /**
+     * Respawns a boxer that died under manual-death mode, at its death spot with
+     * full health and its kit re-applied. A no-op if the boxer is alive.
+     */
+    void respawn();
+
     /** Despawns and unregisters. Idempotent. */
     void remove();
 }
