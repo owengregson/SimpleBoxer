@@ -9,6 +9,9 @@ import me.vexmc.simpleboxer.common.brain.Intent.FacingIntent;
 import me.vexmc.simpleboxer.common.brain.Intent.JumpHint;
 import me.vexmc.simpleboxer.common.brain.goal.EngageGoal;
 import me.vexmc.simpleboxer.common.brain.goal.IdleGoal;
+import me.vexmc.simpleboxer.common.brain.goal.PotHealGoal;
+import me.vexmc.simpleboxer.common.brain.goal.RodPokeGoal;
+import me.vexmc.simpleboxer.common.brain.goal.SeekFoodGoal;
 import me.vexmc.simpleboxer.common.brain.goal.StandGoal;
 import me.vexmc.simpleboxer.common.combat.ClickScheduler;
 import me.vexmc.simpleboxer.common.physics.CollisionView;
@@ -44,6 +47,7 @@ public final class Brain {
     private final LocalPathPlanner planner = new LocalPathPlanner();
     private final MotorQuantizer motor = new MotorQuantizer();
     private final ClickController clicks = new ClickController();
+    private final BlockhitController blockhit = new BlockhitController();
 
     public Brain(@NotNull BoxerSettings settings, long seed, float initialYaw, float initialPitch) {
         this.settings = settings;
@@ -51,10 +55,14 @@ public final class Brain {
         this.clicker = new ClickScheduler(settings.cps(), settings.clickJitter(), seed);
         this.memory = new BrainMemory(seed);
         List<Goal> goals = new ArrayList<>();
+        // Survival/technique routines score ABOVE ordinary engagement when their
+        // situation fires (low health, hunger, a rod-pokeable approach) and pre-empt it.
+        goals.add(new PotHealGoal(this::settings));
+        goals.add(new SeekFoodGoal(this::settings));
+        goals.add(new RodPokeGoal(this::settings));
         goals.add(new EngageGoal(this::settings, adaptiveStrafe));
         goals.add(new StandGoal(this::settings));
         goals.add(new IdleGoal());
-        // Routines (heal, rod, blockhit, food) are appended here in a later phase.
         this.arbiter = new Arbiter(goals);
     }
 
@@ -125,9 +133,18 @@ public final class Brain {
             actions.add(intent.action());
         }
         boolean suppressed = p.self().useItem() == Perception.UseItemState.USING
-                || intent.action() instanceof ActionIntent.StartUse;
+                || intent.action() instanceof ActionIntent.StartUse
+                || decision.goal().suppressesAttack();
         clicks.consider(p, aim.yaw(), s.reach(), s.aimToleranceDegrees(), suppressed,
                 s.combat().missChance(), clicker, nowMs, memory, actions);
+
+        // Blockhit layer: only while actually fighting (a routine that suppresses
+        // attacks is holding a rod/pot/food, not a sword to block with).
+        if (!decision.goal().suppressesAttack() && p.hasTarget()) {
+            boolean attackFiring = actions.stream().anyMatch(a -> a instanceof ActionIntent.Attack);
+            boolean inMelee = p.target().distance() <= s.reach() + 0.5;
+            blockhit.apply(p, s.combat().blockHit(), inMelee, attackFiring, memory, actions);
+        }
 
         return new BrainOutput(move, aim.yaw(), aim.pitch(), actions, move.sprint());
     }

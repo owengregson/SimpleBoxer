@@ -41,4 +41,13 @@ public interface Goal {
     default boolean exclusive(@NotNull Perception perception) {
         return false;
     }
+
+    /**
+     * When this goal is the winner, whether the click controller should hold its
+     * fire — a retreating/healing/eating boxer does not swing. Combat goals leave
+     * it false so the CPS clock keeps attacking.
+     */
+    default boolean suppressesAttack() {
+        return false;
+    }
 }
