@@ -57,6 +57,20 @@ public final class PacketIO {
     private Constructor<?> clientCommandConstructor;
     private Object performRespawn;
 
+    // Item-use packets (feature: rod/pot/blockhit/eat). Modern-first: absent
+    // shapes leave the factory null and the routine self-disables via its
+    // capability flag. Probed once in resolve() and memoized.
+    private @Nullable Constructor<?> setCarriedItemConstructor;
+    private @Nullable Object offHand;
+    private @Nullable Constructor<?> useItemConstructor;
+    private boolean useItemHasSequence;
+    private boolean useItemHasRotation;
+    private @Nullable Constructor<?> playerActionConstructor;
+    private boolean playerActionHasSequence;
+    private @Nullable Object releaseUseItemAction;
+    private @Nullable Object blockPosOrigin;
+    private @Nullable Object directionDown;
+
     private @Nullable Constructor<?> inputRecordConstructor;
     private @Nullable Constructor<?> inputPacketConstructor;
     private @Nullable Constructor<?> playerLoadedConstructor;
@@ -253,6 +267,155 @@ public final class PacketIO {
         } catch (ClassNotFoundException pre1194) {
             bundlePacketClass = null;
         }
+
+        resolveItemPackets();
+    }
+
+    /**
+     * Probes the serverbound item-interaction packets — held-slot swap, use-item
+     * (rod cast / block raise / potion throw / eat), and the release-use action.
+     * Each is independent and best-effort: a shape that fails to resolve leaves
+     * its factory null, and the item routines see the capability as absent (they
+     * never win arbitration they cannot execute). UseItem/PlayerAction gained a
+     * sequence int in 1.19 and UseItem gained yaw/pitch in 1.21.3 — arity-probed.
+     */
+    private void resolveItemPackets() {
+        Class<?> handClass;
+        try {
+            handClass = bridge.nmsClass("net.minecraft.world.InteractionHand");
+            Object[] hands = handClass.getEnumConstants();
+            offHand = hands.length > 1 ? hands[1] : hands[0];
+        } catch (ReflectiveOperationException noHand) {
+            return;
+        }
+
+        try {
+            Class<?> setCarried = bridge.nmsClass(
+                    "net.minecraft.network.protocol.game.ServerboundSetCarriedItemPacket");
+            setCarriedItemConstructor = setCarried.getConstructor(int.class);
+        } catch (ReflectiveOperationException noSetCarried) {
+            setCarriedItemConstructor = null;
+        }
+
+        try {
+            Class<?> useItem = bridge.nmsClass(
+                    "net.minecraft.network.protocol.game.ServerboundUseItemPacket");
+            for (Constructor<?> constructor : useItem.getConstructors()) {
+                Class<?>[] p = constructor.getParameterTypes();
+                if (p.length == 0 || p[0] != handClass) {
+                    continue;
+                }
+                if (p.length == 1) {
+                    preferUseItem(constructor, false, false);
+                } else if (p.length == 2 && p[1] == int.class) {
+                    preferUseItem(constructor, true, false);
+                } else if (p.length == 4 && p[1] == int.class
+                        && p[2] == float.class && p[3] == float.class) {
+                    preferUseItem(constructor, true, true);
+                }
+            }
+        } catch (ReflectiveOperationException noUseItem) {
+            useItemConstructor = null;
+        }
+
+        try {
+            Class<?> action = bridge.nmsClass(
+                    "net.minecraft.network.protocol.game.ServerboundPlayerActionPacket");
+            Class<?> actionEnum = nestedEnum(action, "Action");
+            releaseUseItemAction = enumByNameContains(actionEnum, "RELEASE_USE_ITEM", 5);
+            Class<?> blockPosClass = bridge.nmsClass("net.minecraft.core.BlockPos");
+            blockPosOrigin = staticFieldValue(blockPosClass, "ZERO");
+            Class<?> directionClass = bridge.nmsClass("net.minecraft.core.Direction");
+            directionDown = directionClass.getEnumConstants()[0]; // DOWN is ordinal 0 on every version
+            for (Constructor<?> constructor : action.getConstructors()) {
+                Class<?>[] p = constructor.getParameterTypes();
+                boolean base = p.length >= 3 && p[0] == actionEnum
+                        && p[1] == blockPosClass && p[2] == directionClass;
+                if (!base) {
+                    continue;
+                }
+                if (p.length == 3) {
+                    playerActionConstructor = constructor;
+                    playerActionHasSequence = false;
+                    break; // prefer the seqless shape when both exist
+                }
+                if (p.length == 4 && p[3] == int.class) {
+                    playerActionConstructor = constructor;
+                    playerActionHasSequence = true;
+                }
+            }
+        } catch (ReflectiveOperationException noPlayerAction) {
+            playerActionConstructor = null;
+        }
+    }
+
+    private void preferUseItem(Constructor<?> constructor, boolean hasSeq, boolean hasRotation) {
+        // Prefer the richest shape the server offers (rotation > seq > bare).
+        int existing = (useItemHasRotation ? 2 : 0) + (useItemHasSequence ? 1 : 0);
+        int candidate = (hasRotation ? 2 : 0) + (hasSeq ? 1 : 0);
+        if (useItemConstructor == null || candidate > existing) {
+            useItemConstructor = constructor;
+            useItemHasSequence = hasSeq;
+            useItemHasRotation = hasRotation;
+        }
+    }
+
+    private static @Nullable Object staticFieldValue(Class<?> owner, String name) {
+        try {
+            Field field = owner.getField(name);
+            return field.get(null);
+        } catch (ReflectiveOperationException | RuntimeException absent) {
+            return null;
+        }
+    }
+
+    /** Whether this server exposes the held-slot + use-item + release packets. */
+    public boolean itemInteractionsAvailable() {
+        return setCarriedItemConstructor != null && useItemConstructor != null
+                && playerActionConstructor != null;
+    }
+
+    /** {@code ServerboundSetCarriedItemPacket(slot)} — change the selected hotbar slot (0-8). */
+    public @Nullable Object setCarriedItem(int slot) throws ReflectiveOperationException {
+        return setCarriedItemConstructor == null ? null : setCarriedItemConstructor.newInstance(slot);
+    }
+
+    /**
+     * {@code ServerboundUseItemPacket} — right-click with the held item (rod cast,
+     * block raise, potion throw, eat start). {@code sequence} is the per-boxer
+     * block-change counter (ignored pre-1.19); {@code yaw}/{@code pitch} are the
+     * current crosshair (ignored pre-1.21.3).
+     */
+    public @Nullable Object useItem(boolean mainHand, int sequence, float yaw, float pitch)
+            throws ReflectiveOperationException {
+        if (useItemConstructor == null) {
+            return null;
+        }
+        Object hand = mainHand ? this.mainHand : offHand;
+        if (useItemHasRotation) {
+            return useItemConstructor.newInstance(hand, sequence, yaw, pitch);
+        }
+        if (useItemHasSequence) {
+            return useItemConstructor.newInstance(hand, sequence);
+        }
+        return useItemConstructor.newInstance(hand);
+    }
+
+    /**
+     * {@code ServerboundPlayerActionPacket(RELEASE_USE_ITEM, …)} — stop using the
+     * held item (finish/abort a block or eat). Position and direction are ignored
+     * by the handler for this action; origin + DOWN satisfy the constructor.
+     */
+    public @Nullable Object releaseUseItem(int sequence) throws ReflectiveOperationException {
+        if (playerActionConstructor == null || releaseUseItemAction == null
+                || blockPosOrigin == null || directionDown == null) {
+            return null;
+        }
+        return playerActionHasSequence
+                ? playerActionConstructor.newInstance(
+                        releaseUseItemAction, blockPosOrigin, directionDown, sequence)
+                : playerActionConstructor.newInstance(
+                        releaseUseItemAction, blockPosOrigin, directionDown);
     }
 
     /**

@@ -146,8 +146,12 @@ public final class ConfigStore {
      * hunger) unless a preset file entry overrides them explicitly.
      */
     private static BoxerSettings rebase(BoxerSettings builtin, BoxerSettings defaults) {
+        // The preset owns how it fights (ladder + techniques + kit behavior); the
+        // operator's defaults own the survival policy (does it die, does it starve).
         return new BoxerSettings(builtin.pingMs(), builtin.cps(), builtin.clickJitter(),
                 builtin.aim(), builtin.reach(), builtin.aimToleranceDegrees(), builtin.wtap(),
-                builtin.movement(), defaults.invincible(), defaults.feedHunger());
+                builtin.movement(), defaults.invincible(), defaults.feedHunger(),
+                defaults.invincibleMode(), defaults.death(), builtin.combat(),
+                builtin.selfHeal(), builtin.items(), defaults.hunger());
     }
 }

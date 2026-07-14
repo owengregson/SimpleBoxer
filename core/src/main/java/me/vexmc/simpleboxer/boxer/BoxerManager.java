@@ -210,6 +210,58 @@ public final class BoxerManager implements BoxerService {
                 () -> removeInternal(boxer, "boxer removed"));
     }
 
+    /**
+     * Respawns a dead boxer at its death spot — the same two-hop path a real
+     * player's respawn button + spawn placement take, on the owning region thread
+     * (Folia rejects a respawn/teleport from the global thread).
+     */
+    void requestRespawn(@NotNull BoxerImpl boxer) {
+        Player player = boxer.player();
+        scheduling.runOn(player, () -> {
+            if (!player.isOnline()) {
+                return;
+            }
+            try {
+                player.spigot().respawn();
+            } catch (Throwable respawnFailed) {
+                plugin.getLogger().warning("Respawn of '" + boxer.name() + "' failed: " + respawnFailed);
+                return;
+            }
+            scheduling.runOn(player, () -> {
+                if (!player.isOnline()) {
+                    return;
+                }
+                org.bukkit.Location spot = boxer.deathSpot();
+                if (spot != null) {
+                    teleport(player, spot);
+                }
+                player.setHealth(maxHealthOf(player));
+                boxer.markAlive();
+            }, () -> {});
+        }, () -> {});
+    }
+
+    private static void teleport(Player player, org.bukkit.Location to) {
+        try {
+            player.teleport(to);
+        } catch (UnsupportedOperationException foliaRegionThreading) {
+            player.teleportAsync(to);
+        }
+    }
+
+    @SuppressWarnings("deprecation") // GENERIC_MAX_HEALTH rename across the range
+    private static double maxHealthOf(Player player) {
+        for (org.bukkit.attribute.Attribute attribute : org.bukkit.attribute.Attribute.values()) {
+            if (attribute.name().contains("MAX_HEALTH")) {
+                org.bukkit.attribute.AttributeInstance instance = player.getAttribute(attribute);
+                if (instance != null) {
+                    return instance.getValue();
+                }
+            }
+        }
+        return 20.0;
+    }
+
     /** Owning/main thread. Idempotent. */
     private void removeInternal(@NotNull BoxerImpl boxer, @NotNull String reason) {
         if (boxer.isRemoved()) {

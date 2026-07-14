@@ -64,7 +64,7 @@ final class PresetsMenu extends PaginatedMenu<String> {
                             open(player);
                         }).open(click.player());
             } else {
-                new SettingsMenu(gui(), this, SettingsTarget.forPreset(gui(), name))
+                new SettingsHubMenu(gui(), this, SettingsTarget.forPreset(gui(), name))
                         .open(click.player());
             }
         });
@@ -77,7 +77,7 @@ final class PresetsMenu extends PaginatedMenu<String> {
                         .lore("§7The settings every un-preset spawn uses.",
                                 "",
                                 "§eClick to edit").build(),
-                click -> new SettingsMenu(gui(), this, SettingsTarget.forDefaults(gui()))
+                click -> new SettingsHubMenu(gui(), this, SettingsTarget.forDefaults(gui()))
                         .open(click.player())));
 
         set(47, Button.of(Icon.of(Material.WRITABLE_BOOK)
@@ -100,6 +100,6 @@ final class PresetsMenu extends PaginatedMenu<String> {
         }
         gui().config().savePreset(name, gui().config().snapshot().defaults());
         player.sendMessage("§aCreated preset §f" + name + "§a — now tuning it.");
-        new SettingsMenu(gui(), this, SettingsTarget.forPreset(gui(), name)).open(player);
+        new SettingsHubMenu(gui(), this, SettingsTarget.forPreset(gui(), name)).open(player);
     }
 }

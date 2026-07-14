@@ -247,13 +247,35 @@ is invisible to the server's network stack.
    protocol client — cross-validating that a boxer's received knockback
    matches a real client's byte-for-byte under identical hits.
 
+## The brain, reworked (0.5.0)
+
+The monolithic `decideInput()` is replaced by a **utility-AI brain** living in
+`common.brain` (pure, unit-tested against a synthetic `CollisionView`), landing
+behind the same three seams: the `MoveInput` fed to `ClientPhysics`, the aim
+angles, and the action list. Per tick: an immutable, perception-delayed
+`Perception` → a utility `Arbiter` over weighted `Goal`s (engage, circle-strafe,
+retreat-to-heal, rod-poke, seek-food, …) with dwell/commit hysteresis and
+exclusive latches → an `Intent` → the motor stack (`ContextSteering` slides along
+walls, `ProactiveJump` hops a step before contact with momentum intact,
+`AntiStuck` + a bounded `LocalPathPlanner` route around obstacles,
+`MotorQuantizer` emits strictly digital `{-1,0,1}` impulses — orbit is a
+radius-band duty-cycle, never a fractional forward) → `ClickController` (CPS clock
++ reach/aim-cone gate with latency prediction). All received velocity now funnels
+through one ranked, deduplicated `KnockbackResolver` (own-id echo, melee
+knockback, `PlayerVelocityEvent`, explosions), so StarEnchants/Mental/vanilla
+pushes reach the clientless boxer without double-applying. Survival is decomposed
+into `InvincibilityGuard` (same-tick lethal cap + top-up = burst-proof,
+knockback-preserving), `DeathPolicyGuard` (drops + manual/auto respawn),
+`HungerGuard`, and `PickupListener`.
+
 ## Known deferrals
 
 - **Folia**: the `Scheduling` seam keeps the door open, but spawn/placement
   and cross-region brains need dedicated work; `folia-supported` stays unset
   until done.
-- **Pathfinding**: boxers sprint straight lines, strafe patterns, and jump
-  single-block steps; they do not navigate mazes. Arena-style flat/simple
-  terrain is the use case.
+- **World-scale pathfinding**: navigation is a bounded local planner + reactive
+  steering, re-planned as the boxer moves — enough for arena pillars, walls, and
+  stairs and for chasing across an arena, but not a global maze solver (Folia
+  forbids cross-region block reads).
 - **Persistence**: boxers are ephemeral test fixtures — despawned cleanly on
   shutdown, never written to player data.

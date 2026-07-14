@@ -54,6 +54,44 @@ public final class BoxerSettingsWriter {
 
         section.set("invincible", settings.invincible());
         section.set("feed-hunger", settings.feedHunger());
+        section.set("invincible-mode", token(settings.invincibleMode().name()));
+
+        ConfigurationSection death = fresh(section, "death");
+        death.set("drop-items", settings.death().dropItemsOnDeath());
+        death.set("mode", token(settings.death().mode().name()));
+
+        ConfigurationSection combat = fresh(section, "combat");
+        combat.set("block-hit", settings.combat().blockHit());
+        combat.set("rod-knockback", settings.combat().rodKnockback());
+        combat.set("rod-min", settings.combat().rodMin());
+        combat.set("rod-max", settings.combat().rodMax());
+        combat.set("adaptive-strafe", settings.combat().adaptiveStrafe());
+        combat.set("s-tap", settings.combat().sTap());
+        combat.set("miss-chance", settings.combat().missChance());
+
+        ConfigurationSection selfHeal = fresh(section, "self-heal");
+        selfHeal.set("enabled", settings.selfHeal().enabled());
+        selfHeal.set("trigger-health", settings.selfHeal().triggerHealth());
+        selfHeal.set("resume-health", settings.selfHeal().resumeHealth());
+        selfHeal.set("splash-cap", settings.selfHeal().splashCap());
+
+        ConfigurationSection items = fresh(section, "items");
+        items.set("auto-pickup", settings.items().autoPickup());
+        items.set("lock-loadout", settings.items().lockLoadout());
+        items.set("weapon-slot", settings.items().weaponSlot());
+        items.set("rod-slot", settings.items().rodSlot());
+        items.set("pot-slot", settings.items().potSlot());
+        items.set("food-slot", settings.items().foodSlot());
+        items.set("block-slot", settings.items().blockSlot());
+
+        ConfigurationSection hunger = fresh(section, "hunger");
+        hunger.set("natural", settings.hunger().natural());
+        hunger.set("eat-threshold", settings.hunger().eatThreshold());
+    }
+
+    /** An enum constant as its config token: {@code ZERO_DAMAGE -> zero-damage}. */
+    public static @NotNull String token(@NotNull String enumName) {
+        return enumName.toLowerCase(Locale.ROOT).replace('_', '-');
     }
 
     /** The config token for a movement style: {@code STRAFE_CIRCLE -> strafe-circle}. */

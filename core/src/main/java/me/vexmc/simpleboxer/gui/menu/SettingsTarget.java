@@ -6,11 +6,11 @@ import me.vexmc.simpleboxer.gui.Gui;
 import org.jetbrains.annotations.NotNull;
 
 /**
- * What a {@link SettingsMenu} is editing: a live boxer (changes retune it
- * instantly), the {@code defaults} block, or a named preset (changes persist
- * to {@code config.yml}). The menu reads {@link #settings()} to render and
- * calls {@link #apply(BoxerSettings)} on every change — it never needs to know
- * which scope it's pointed at.
+ * What the {@link SettingsHubMenu} (and its {@link CategoryMenu} screens) is
+ * editing: a live boxer (changes retune it instantly), the {@code defaults}
+ * block, or a named preset (changes persist to {@code config.yml}). The menus
+ * read {@link #settings()} to render and call {@link #apply(BoxerSettings)} on
+ * every change — they never need to know which scope they're pointed at.
  */
 interface SettingsTarget {
 

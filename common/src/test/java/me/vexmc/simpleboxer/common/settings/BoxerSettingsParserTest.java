@@ -138,11 +138,23 @@ class BoxerSettingsParserTest {
         assertEquals(AimParams.LOCKED, DifficultyPresets.AIMBOT.aim());
         assertEquals(0, DifficultyPresets.AIMBOT.pingMs());
         assertNotNull(DifficultyPresets.byName("HaRd"), "lookup is case-insensitive");
-        assertEquals(6, DifficultyPresets.names().size());
-        // Every preset is invincible + fed by default — punching bags first.
-        DifficultyPresets.all().values().forEach(preset -> {
-            assertTrue(preset.invincible());
-            assertTrue(preset.feedHunger());
-        });
+        assertEquals(7, DifficultyPresets.names().size());
+        // The classic ladder are invincible, fed calibration fixtures — a
+        // sparring test never loses its opponent.
+        for (String tier : new String[] {"dummy", "easy", "medium", "hard", "expert", "aimbot"}) {
+            BoxerSettings preset = DifficultyPresets.byName(tier);
+            assertNotNull(preset);
+            assertTrue(preset.invincible(), tier + " is an invincible fixture");
+            assertTrue(preset.feedHunger(), tier + " is fed");
+        }
+        // sweat is the mortal, self-healing, technique-using showcase.
+        assertFalse(DifficultyPresets.SWEAT.invincible());
+        assertEquals(BoxerSettings.Death.Mode.MANUAL, DifficultyPresets.SWEAT.death().mode());
+        assertTrue(DifficultyPresets.SWEAT.death().dropItemsOnDeath());
+        assertTrue(DifficultyPresets.SWEAT.combat().blockHit());
+        assertTrue(DifficultyPresets.SWEAT.combat().rodKnockback());
+        assertTrue(DifficultyPresets.SWEAT.combat().adaptiveStrafe());
+        assertTrue(DifficultyPresets.SWEAT.selfHeal().enabled());
+        assertTrue(DifficultyPresets.SWEAT.hunger().natural());
     }
 }
