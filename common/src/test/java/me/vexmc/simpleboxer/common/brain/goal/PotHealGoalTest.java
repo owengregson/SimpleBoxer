@@ -37,7 +37,7 @@ class PotHealGoalTest {
                 healthPct, 1.0, Perception.UseItemState.NONE, false);
         Perception.TargetState target = new Perception.TargetState(
                 distance, 64, 0, 65.6, Vec3d.ZERO,
-                90.0, 0.0, distance, false);
+                90.0, 0.0, 0.0, distance, false);
         Perception.InventoryView inv = new Perception.InventoryView(
                 true, true, hasPots, true, true, 0);
         return new Perception(self, target, Perception.TerrainView.OPEN,

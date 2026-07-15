@@ -40,7 +40,7 @@ class RodPokeGoalTest {
                 0, 0, 0, Vec3d.ZERO, true, false, 1.0, 1.0,
                 Perception.UseItemState.NONE, false);
         Perception.TargetState target = new Perception.TargetState(
-                4.0, 0.0, 0.0, 1.6, targetVel, 0.0, 0.0, distance, false);
+                4.0, 0.0, 0.0, 1.6, targetVel, 0.0, 0.0, 0.0, distance, false);
         Perception.InventoryView inv = new Perception.InventoryView(
                 true, hasRod, false, false, false, 0);
         return new Perception(self, target, Perception.TerrainView.OPEN, inv,

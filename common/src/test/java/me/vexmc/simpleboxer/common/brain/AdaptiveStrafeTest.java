@@ -26,7 +26,8 @@ class AdaptiveStrafeTest {
                 1.0, 1.0, Perception.UseItemState.NONE, false);
         Perception.TargetState target = new Perception.TargetState(
                 3, 64, 0, 65.6, Vec3d.ZERO,
-                /* bearingToMeYaw */ 90.0, oppTrackRateDegPerTick,
+                /* bearingToMeYaw */ 90.0, Math.abs(oppTrackRateDegPerTick),
+                /* signedTrackRateDegPerTick */ oppTrackRateDegPerTick,
                 /* distance */ 3.0, false);
         return new Perception(self, target, Perception.TerrainView.OPEN,
                 Perception.InventoryView.EMPTY, Perception.CombatState.IDLE, 0);

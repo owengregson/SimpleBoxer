@@ -593,14 +593,16 @@ final class BoxerImpl implements Boxer {
                 hasPrevTargetYaw = false;
                 prevAimTarget = view.entity();
             }
-            double trackRate = 0.0;
+            double signedTrackRate = 0.0;
             if (hasPrevTargetYaw) {
-                trackRate = Math.abs(wrapDegrees(view.yaw() - prevTargetYaw));
+                signedTrackRate = wrapDegrees(view.yaw() - prevTargetYaw);
             }
+            double trackRate = Math.abs(signedTrackRate);
             prevTargetYaw = view.yaw();
             hasPrevTargetYaw = true;
             targetState = new Perception.TargetState(view.x(), view.y(), view.z(), view.eyeY(),
-                    new Vec3d(view.vx(), 0.0, view.vz()), bearingToMe, trackRate, distance, view.blocking());
+                    new Vec3d(view.vx(), 0.0, view.vz()), bearingToMe, trackRate, signedTrackRate,
+                    distance, view.blocking());
         } else {
             hasPrevTargetYaw = false;
         }
