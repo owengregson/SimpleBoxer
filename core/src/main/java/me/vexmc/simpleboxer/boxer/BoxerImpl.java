@@ -351,9 +351,9 @@ final class BoxerImpl implements Boxer {
         physics.step(input, aimYaw, collisionView);
         pushAwayFromNeighbors();
 
-        // WS1c diagnosis (temporary): trace the sim vs server-entity Y whenever the
-        // boxer is wall-collided, to catch the "glued to the wall, no gravity" bug at
-        // the sim<->server boundary. Behind -Dsimpleboxer.debug; remove once fixed.
+        // Matrix forensics: trace the sim vs server-entity Y whenever the boxer is
+        // wall-collided — the diff exposes any sim<->server divergence on contact
+        // (e.g. a "stuck on the wall" report). Behind -Dsimpleboxer.debug.
         if (DEBUG && physics.horizontalCollision()) {
             Location serverLoc = spawned.player().getLocation();
             logger.info(String.format(
@@ -536,8 +536,8 @@ final class BoxerImpl implements Boxer {
             double y = sync.relativeY() ? physics.y() + sync.y() : sync.y();
             double z = sync.relativeZ() ? physics.z() + sync.z() : sync.z();
             var velocity = physics.velocity();
-            // WS1c diagnosis (temporary): a server position-correction is the prime
-            // suspect for the jump-into-wall "glue" — log every one it sends us.
+            // Matrix forensics: log every server position-correction the boxer adopts
+            // (teleport / "moved wrongly" resync) — behind -Dsimpleboxer.debug.
             if (DEBUG) {
                 logger.info(String.format(
                         "[debug %s] POSITION-CORRECTION sim=(%.3f,%.3f,%.3f) -> (%.3f,%.3f,%.3f) relY=%b hColl=%b",
