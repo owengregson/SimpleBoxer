@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.6.1 — wall-glue fix
+
+- **Fixed boxers gluing to walls.** The reported "sticks to a wall and won't fall"
+  bug was a *server-side* correction loop, not a physics bug: when a boxer is
+  airborne and pressed into a wall, a collision-shape disagreement between the
+  emulator and the server (seen at chunk borders) made the server "moved-wrongly"-
+  correct the boxer's fall **back up** to the same spot every tick, so it hung on
+  the wall. The boxer now detects the non-descending airborne wall-contact and
+  briefly drives straight off the wall to a position the server accepts, so gravity
+  takes over again. (Confirmed from a live `-Dsimpleboxer.debug` trace; the debug
+  line now also reports the escape countdown.)
+
 ## 0.6.0 — combat, navigation & fidelity upgrade
 
 A follow-up to the 0.5.0 rework. Boxers move, fight, and survive more like a real
