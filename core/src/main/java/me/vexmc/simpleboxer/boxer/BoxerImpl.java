@@ -155,21 +155,35 @@ final class BoxerImpl implements Boxer {
     private int idleMoveTicks;
 
     /**
-     * Wall-glue escape. Some servers repeatedly "moved-wrongly"-correct a boxer that is
-     * airborne and pressed into a wall — a collision-shape disagreement between our
-     * emulator and the server (common at chunk borders) makes the server snap the boxer
-     * back UP to the same spot every tick, so its fall never reaches the server and it
-     * hangs on the wall like glue. We detect the non-descending airborne wall-contact
-     * and briefly drive the boxer straight AWAY from the wall, reaching a position the
-     * server accepts so gravity can take over again.
+     * Wall-glue recovery. A boxer that jumps/knocks into a wall lands its fall on a floor
+     * OUR collision finds correctly, but the server's {@code handleMovePlayer} anti-cheat
+     * can reject the wall-pressed descent as "moved wrongly" and snap the body back UP to
+     * the last-good apex every tick; {@link #route} then faithfully re-adopts that
+     * correction, so the boxer oscillates against the wall forever ("glued"). The sim
+     * already KNOWS where the floor is — only the server body is stuck — so when we detect
+     * the correction loop we stop re-adopting the bogus up-corrections and drive the body
+     * straight to the sim's own authoritative, floor-seeking position via a direct
+     * server-side {@code setPosition} (the same write reanchor/restore use), bypassing the
+     * anti-cheat that was fighting the fall. Recovery ends the instant the sim is grounded.
      */
-    private int wallHangTicks;
-    private double wallHangStartY;
-    private int wallEscapeTicks;
-    private static final int GLUE_DETECT_TICKS = 8;
-    private static final double GLUE_MIN_DESCENT = 0.4;
-    private static final int GLUE_ESCAPE_TICKS = 12;
-    private static final double GLUE_ESCAPE_BACK = 0.85;
+    private int glueRecoverTicks;
+    private int glueCorrectionStreak;
+    private double glueLastCorrectionY;
+    /** Ticks since the last up-snap correction — recovery only ends once this shows the
+     *  server has stopped rejecting us (the correction stream, and its ack tail, drained). */
+    private int glueQuietTicks;
+    /** Consecutive up-snap corrections that mark the loop (vs. a one-off resync). */
+    private static final int GLUE_CORRECTION_STREAK = 3;
+    /** Safety cap on a recovery window; it normally ends far sooner, on convergence. */
+    private static final int GLUE_RECOVER_TICKS = 30;
+    /** Corrections must stay silent this long (covers the RTT ack tail) before we un-arm. */
+    private static final int GLUE_QUIET_TICKS = 5;
+    /** A correction farther than this is a real teleport/respawn, not a glue up-snap. */
+    private static final double GLUE_MAX_SNAP = 2.0;
+    /** Minimum upward snap for a correction to read as a denied descent (vs. float noise). */
+    private static final double GLUE_UP_SNAP = 0.03;
+    /** How close successive up-snap targets must sit to count as the same hang. */
+    private static final double GLUE_SAME_LEVEL = 0.1;
 
     /**
      * Where our packets last left the boxer's server position. On a server that
@@ -309,7 +323,7 @@ final class BoxerImpl implements Boxer {
         // Keep the pot slot loaded from the finite splash-pot reserve so the heal
         // routine can throw again next cycle — until the whole supply runs out.
         restockPotSlot();
-        if (serverTicksEntity && hasAnchor) {
+        if (serverTicksEntity && hasAnchor && glueRecoverTicks == 0) {
             reanchorServerPosition();
         }
         long now = System.nanoTime();
@@ -364,32 +378,32 @@ final class BoxerImpl implements Boxer {
             }
             syncSprint(out.sprintDesire());
         }
-        // Wall-glue escape: while escaping, IGNORE the brain's push into the wall and
-        // drive straight back off it, so the boxer reaches a position the server will
-        // accept and stops being corrected back up onto the wall face.
-        if (wallEscapeTicks > 0) {
-            wallEscapeTicks--;
-            input = new MoveInput(-GLUE_ESCAPE_BACK, 0.0, false, false, false);
-        }
         queueInput(input, now);
         physics.step(input, aimYaw, collisionView);
         pushAwayFromNeighbors();
 
-        // Detect the wall glue: airborne AND wall-collided AND not descending for many
-        // ticks means the server is snapping the boxer's fall back up (the correction
-        // loop). Break away from the wall rather than hang there.
-        if (physics.horizontalCollision() && !physics.onGround()) {
-            if (wallHangTicks == 0) {
-                wallHangStartY = physics.y();
+        // Glue recovery (armed by route() on a "moved-wrongly" correction loop): while it
+        // runs, the bogus up-corrections are ignored, reanchor/restore are suspended, and
+        // step 6 force-writes the body onto the sim, dragging it down to the floor the sim
+        // already found. It ends once the two have CONVERGED — the sim is grounded AND the
+        // body has caught up to it (not merely "sim grounded": the sim is grounded on half
+        // the glued ticks already, and clearing then would strand the body up the wall
+        // before the force-write could pull it down).
+        if (glueRecoverTicks > 0) {
+            glueRecoverTicks--;
+            glueQuietTicks++;
+            double serverY = spawned.player().getLocation().getY();
+            // Converge only when all three hold: the sim is grounded, the body has caught
+            // up to it, AND the server has gone quiet — no fresh up-snap for GLUE_QUIET_TICKS,
+            // i.e. our floor report was accepted and the correction/ack tail has drained. If
+            // the server never accepts (a real surface at the apex — not this bug), the
+            // GLUE_RECOVER_TICKS cap is the backstop.
+            if (physics.onGround()
+                    && Math.abs(serverY - physics.y()) < GLUE_SAME_LEVEL
+                    && glueQuietTicks >= GLUE_QUIET_TICKS) {
+                glueRecoverTicks = 0;
+                glueCorrectionStreak = 0;
             }
-            wallHangTicks++;
-            if (wallHangTicks >= GLUE_DETECT_TICKS
-                    && wallHangStartY - physics.y() < GLUE_MIN_DESCENT) {
-                wallEscapeTicks = GLUE_ESCAPE_TICKS;
-                wallHangTicks = 0;
-            }
-        } else {
-            wallHangTicks = 0;
         }
 
         // Matrix forensics: trace the sim vs server-entity Y whenever the boxer is
@@ -398,10 +412,11 @@ final class BoxerImpl implements Boxer {
         if (DEBUG && physics.horizontalCollision()) {
             Location serverLoc = spawned.player().getLocation();
             logger.info(String.format(
-                    "[debug %s] wallCollide sim=(%.3f,%.3f,%.3f) vy=%.4f onGround=%b | server=(%.3f,%.3f,%.3f) escape=%d",
+                    "[debug %s] wallCollide sim=(%.3f,%.3f,%.3f) vy=%.4f onGround=%b | "
+                            + "server=(%.3f,%.3f,%.3f) srvGround=%b recover=%d",
                     name, physics.x(), physics.y(), physics.z(), physics.velocity().y(),
                     physics.onGround(), serverLoc.getX(), serverLoc.getY(), serverLoc.getZ(),
-                    wallEscapeTicks));
+                    spawned.player().isOnGround(), glueRecoverTicks));
         }
 
         // 3. Report movement the way a real client does.
@@ -424,8 +439,26 @@ final class BoxerImpl implements Boxer {
             }
         }
 
-        // 6. Tick the ServerPlayer where the server will not do it itself.
-        if (serverTicksEntity) {
+        // 6. Tick the ServerPlayer where the server will not do it itself — or, while
+        //    recovering from wall glue, FORCE the body onto the sim's authoritative,
+        //    floor-seeking position (bypassing the anti-cheat that was rejecting the
+        //    descent) so the frozen body follows the sim down to the ground the sim
+        //    already found. This suspends both reanchor and the doTick restore: the sim
+        //    is the sole authority until it lands and recovery clears.
+        if (glueRecoverTicks > 0) {
+            try {
+                bridge.setPosition(spawned.serverPlayer(),
+                        physics.x(), physics.y(), physics.z());
+            } catch (ReflectiveOperationException failure) {
+                logger.warning("[" + name + "] glue-recovery reposition failed: " + failure);
+            }
+            if (serverTicksEntity) {
+                anchorX = physics.x();
+                anchorY = physics.y();
+                anchorZ = physics.z();
+                hasAnchor = true;
+            }
+        } else if (serverTicksEntity) {
             Location anchor = spawned.player().getLocation();
             anchorX = anchor.getX();
             anchorY = anchor.getY();
@@ -577,27 +610,69 @@ final class BoxerImpl implements Boxer {
             double x = sync.relativeX() ? physics.x() + sync.x() : sync.x();
             double y = sync.relativeY() ? physics.y() + sync.y() : sync.y();
             double z = sync.relativeZ() ? physics.z() + sync.z() : sync.z();
-            var velocity = physics.velocity();
-            // Matrix forensics: log every server position-correction the boxer adopts
+
+            // Wall-glue signature: a small ABSOLUTE-Y correction snapping the boxer UP
+            // while it is pressed against a wall — the server denying a wall-pressed
+            // descent. A run of these to ~the same height IS the "moved-wrongly" loop.
+            // Arm recovery on the streak; once armed, IGNORE the up-snaps entirely
+            // (re-adopting each one is exactly what pinned the boxer to the wall) — the
+            // sim keeps falling to the floor it already found while step 6 drags the body
+            // down after it. A real teleport (large, or downward, or off the wall) fails
+            // the signature, resets the streak, and is adopted normally.
+            double dx = x - physics.x();
+            double dy = y - physics.y();
+            double dz = z - physics.z();
+            double distSq = dx * dx + dy * dy + dz * dz;
+            boolean glueUpSnap = !sync.relativeY()
+                    && physics.horizontalCollision()
+                    && dy > GLUE_UP_SNAP
+                    && distSq < GLUE_MAX_SNAP * GLUE_MAX_SNAP;
+            if (glueUpSnap) {
+                glueCorrectionStreak = Math.abs(y - glueLastCorrectionY) < GLUE_SAME_LEVEL
+                        ? glueCorrectionStreak + 1 : 1;
+                glueLastCorrectionY = y;
+                glueQuietTicks = 0; // a fresh rejection — the server has NOT accepted us yet
+                if (glueCorrectionStreak >= GLUE_CORRECTION_STREAK) {
+                    glueRecoverTicks = GLUE_RECOVER_TICKS;
+                }
+            } else {
+                glueCorrectionStreak = 0;
+                // A genuine reposition (teleport / respawn) supersedes recovery in flight;
+                // a mere momentary loss of wall contact does not.
+                if (distSq > GLUE_MAX_SNAP * GLUE_MAX_SNAP) {
+                    glueRecoverTicks = 0;
+                }
+            }
+            boolean ignore = glueRecoverTicks > 0 && glueUpSnap;
+
+            // Matrix forensics: log every server position-correction the boxer sees
             // (teleport / "moved wrongly" resync) — behind -Dsimpleboxer.debug.
             if (DEBUG) {
                 logger.info(String.format(
-                        "[debug %s] POSITION-CORRECTION sim=(%.3f,%.3f,%.3f) -> (%.3f,%.3f,%.3f) relY=%b hColl=%b",
+                        "[debug %s] POSITION-CORRECTION sim=(%.3f,%.3f,%.3f) -> (%.3f,%.3f,%.3f) "
+                                + "relY=%b hColl=%b ignore=%b streak=%d",
                         name, physics.x(), physics.y(), physics.z(), x, y, z,
-                        sync.relativeY(), physics.horizontalCollision()));
+                        sync.relativeY(), physics.horizontalCollision(),
+                        ignore, glueCorrectionStreak));
             }
-            physics.teleport(x, y, z);
-            if (sync.velocity() != null) {
-                Inbound.PositionSync.Motion motion = sync.velocity();
-                physics.applyVelocity(
-                        motion.deltaX() ? velocity.x() + motion.x() : motion.x(),
-                        motion.deltaY() ? velocity.y() + motion.y() : motion.y(),
-                        motion.deltaZ() ? velocity.z() + motion.z() : motion.z());
-            } else {
-                physics.applyVelocity(
-                        sync.relativeX() ? velocity.x() : 0.0,
-                        sync.relativeY() ? velocity.y() : 0.0,
-                        sync.relativeZ() ? velocity.z() : 0.0);
+
+            // Adopt the position/velocity unless we are shedding a glue up-snap; the
+            // teleport ack and rotation are adopted either way so the wire stays in sync.
+            if (!ignore) {
+                var velocity = physics.velocity();
+                physics.teleport(x, y, z);
+                if (sync.velocity() != null) {
+                    Inbound.PositionSync.Motion motion = sync.velocity();
+                    physics.applyVelocity(
+                            motion.deltaX() ? velocity.x() + motion.x() : motion.x(),
+                            motion.deltaY() ? velocity.y() + motion.y() : motion.y(),
+                            motion.deltaZ() ? velocity.z() + motion.z() : motion.z());
+                } else {
+                    physics.applyVelocity(
+                            sync.relativeX() ? velocity.x() : 0.0,
+                            sync.relativeY() ? velocity.y() : 0.0,
+                            sync.relativeZ() ? velocity.z() : 0.0);
+                }
             }
             float yaw = sync.relativeYaw() ? aimYaw + sync.yaw() : sync.yaw();
             float pitch = sync.relativePitch() ? aimPitch + sync.pitch() : sync.pitch();
