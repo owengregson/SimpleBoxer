@@ -44,7 +44,10 @@ public final class Brain {
     private final ContextSteering steering = new ContextSteering();
     private final ProactiveJump proactiveJump = new ProactiveJump();
     private final AntiStuck antiStuck = new AntiStuck();
-    private final LocalPathPlanner planner = new LocalPathPlanner();
+    // Baritone-style 3D voxel A* (traverse/diagonal/ascend/descend/fall) — same
+    // route() seam as the retired LocalPathPlanner, but it finds elevation routes
+    // (stairs/step-ups off the direct line) and degrades to an anytime partial.
+    private final BaritoneStylePlanner planner = new BaritoneStylePlanner();
     private final MotorQuantizer motor = new MotorQuantizer();
     private final ClickController clicks = new ClickController();
     private final BlockhitController blockhit = new BlockhitController();
@@ -202,6 +205,18 @@ public final class Brain {
             memory.clearPath();
         }
 
+        // Elevation-aware pathing (proactive, not a stuck-rescue): when the target
+        // sits on a different level — a platform reachable only by stairs/step-ups
+        // that may run AWAY from the direct line — plan a 3D route now, so the boxer
+        // seeks the access route instead of pressing uselessly straight under (or
+        // over) the target. Reactive steering can't discover an off-line staircase.
+        if (needsElevationRoute(p, desired) && planRoute(p, world)) {
+            MoveHeading routed = followRoute(p, world, mayLeaveLedges);
+            if (routed != null) {
+                return routed;
+            }
+        }
+
         MoveHeading heading = steering.steer(p, desired, world, mayLeaveLedges);
 
         // Advance the stall counter every tick, but only ACT on it when the boxer
@@ -232,6 +247,27 @@ public final class Brain {
         Vec3d toTarget = new Vec3d(t.x() - p.self().x(), 0.0, t.z() - p.self().z())
                 .horizontalNormalized();
         return desired.horizontalNormalized().dot(toTarget) > 0.4;
+    }
+
+    /** Vertical gap (blocks) beyond which the target counts as a different LEVEL — more
+     *  than a running jump can bridge directly, so it needs a planned access route. */
+    private static final double ELEVATION_GAP = 1.5;
+
+    /**
+     * True when the target sits on a different level than the boxer (a raised or sunken
+     * platform more than a step/jump away vertically) and the boxer is trying to close
+     * on it. Reactive steering reasons only in the horizontal plane, so it cannot
+     * discover an off-line staircase up to the target; the 3D planner can, and running
+     * it proactively here (not as a stuck-rescue) is what makes the boxer go find the
+     * stairs instead of stalling directly under the platform.
+     */
+    private static boolean needsElevationRoute(Perception p, Vec3d desired) {
+        Perception.TargetState t = p.target();
+        if (t == null) {
+            return false;
+        }
+        boolean elevationGap = Math.abs(t.y() - p.self().y()) > ELEVATION_GAP;
+        return elevationGap && t.distance() > 2.0 && isApproaching(p, desired);
     }
 
     /** Plan a fresh bounded route to the target; returns true and stores it if found. */
