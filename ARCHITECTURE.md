@@ -273,9 +273,13 @@ knockback-preserving), `DeathPolicyGuard` (drops + manual/auto respawn),
 - **Folia**: the `Scheduling` seam keeps the door open, but spawn/placement
   and cross-region brains need dedicated work; `folia-supported` stays unset
   until done.
-- **World-scale pathfinding**: navigation is a bounded local planner + reactive
-  steering, re-planned as the boxer moves — enough for arena pillars, walls, and
-  stairs and for chasing across an arena, but not a global maze solver (Folia
-  forbids cross-region block reads).
+- **World-scale pathfinding**: navigation is a Baritone-style 3D voxel A*
+  (`BaritoneStylePlanner` — traverse/diagonal/ascend/descend/fall, tick-scaled
+  `MoveCosts`, a vertical heuristic that reaches elevated targets, anytime partial
+  paths) over the reactive steering motor, re-planned as the boxer moves. It is
+  still **region-bounded** by design — every neighbour cell is gated through
+  `CollisionView.isReadable`, so the search halts at the loaded/region frontier
+  and never reads cross-region (Folia-safe). Rich enough for arena stairs,
+  pillars, gaps, and platforms; it is not a global maze solver across regions.
 - **Persistence**: boxers are ephemeral test fixtures — despawned cleanly on
   shutdown, never written to player data.
