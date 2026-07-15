@@ -88,6 +88,32 @@ class ContextSteeringTest {
     }
 
     @Test
+    void obliqueWallKeepsNearestDesiredHeading() {
+        // A tall wall due East (x in [1,2]); the goal wants to travel OBLIQUELY into
+        // it (40deg north of East). A real client presses that heading and physics
+        // slides it north along the wall — it does NOT turn 90deg to walk due North.
+        FakeWorld world = FakeWorld.floorAt(64).wall(1, 64, -10, 1, 67, 10);
+        Vec3d desired = new Vec3d(0.76604, 0.0, 0.64279); // 40deg north of East, unit
+        Perception p = perceptionAt(0.5, 64, 0.5, desired.scale(0.3)); // pressing at a sprint
+
+        MoveHeading heading = steering.steer(p, desired, world);
+        assertFalse(heading.isStill(), "should keep pressing toward the target");
+
+        // The chosen heading hugs the desired direction (a shallow graze physics
+        // will finish) rather than snapping to the pure along-wall perpendicular
+        // (due North, dot with desired ~= 0.64).
+        double dotDesired = heading.dirWorld().normalized().dot(desired.normalized());
+        assertTrue(dotDesired > 0.9,
+                "oblique slide should keep the nearest-to-desired heading, got dot=" + dotDesired);
+
+        // It is genuinely a graze: the heading still runs into the wall within the
+        // full look-ahead — ClientPhysics.collide finishes the slide, we don't.
+        Box box = NavGeometry.playerBox(0.5, 64, 0.5);
+        assertTrue(NavGeometry.wallAhead(world, box, heading.dirWorld(), NavGeometry.LOOK_AHEAD),
+                "the kept heading should graze the wall, not fully clear it");
+    }
+
+    @Test
     void desiredZero_returnsStill() {
         FakeWorld world = FakeWorld.floorAt(64);
         Perception p = perceptionAt(0.5, 64, 0.5, Vec3d.ZERO);
