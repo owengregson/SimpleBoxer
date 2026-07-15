@@ -7,6 +7,7 @@ import me.vexmc.simpleboxer.common.settings.DifficultyPresets;
 import me.vexmc.simpleboxer.tester.TestCase;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
+import org.bukkit.Material;
 import org.bukkit.World;
 import org.bukkit.potion.PotionEffect;
 import org.bukkit.potion.PotionEffectType;
@@ -160,6 +161,78 @@ public final class MovementSuite {
                     } finally {
                         context.syncRun(fighter::remove);
                         context.syncRun(bag::remove);
+                    }
+                }),
+
+                new TestCase("movement: a boxer that jumps into a wall falls back down",
+                        context -> {
+                    // WS1c repro: a boxer sprints at a 1-block step fronting a 3-tall
+                    // wall, so it proactive-jumps the step and drifts into the wall
+                    // MID-AIR. The reported bug: it sometimes sticks to the wall face
+                    // and stops falling ("glued", no gravity). Run under real NMS with
+                    // -Dsimpleboxer.debug to capture the sim<->server boundary trace.
+                    World world = Bukkit.getWorlds().get(0);
+                    Location center = context.sync(() -> Arenas.arena(world, 310, 100));
+                    int baseX = 310;
+                    int baseZ = 100;
+                    int groundY = 80; // stone top at y=81 (feet ground)
+                    context.syncRun(() -> {
+                        for (int x = baseX - 6; x <= baseX + 6; x++) {
+                            // 1-block step at z=baseZ+3 (top y=82) — the jump trigger.
+                            world.getBlockAt(x, groundY + 1, baseZ + 3).setType(Material.STONE);
+                            // 3-tall wall right behind it at z=baseZ+4 (y 81..83).
+                            for (int dy = 1; dy <= 3; dy++) {
+                                world.getBlockAt(x, groundY + dy, baseZ + 4).setType(Material.STONE);
+                            }
+                        }
+                    });
+                    // A stationary post BEYOND the wall so the boxer keeps charging +Z.
+                    Boxer post = Arenas.spawn("WallPost",
+                            center.clone().add(0, 0, 12), DifficultyPresets.DUMMY);
+                    Boxer runner = Arenas.spawn("WallRunner", center,
+                            BoxerSettings.DEFAULTS.withCps(0.0));
+                    try {
+                        context.awaitTicks(5);
+                        context.syncRun(() -> runner.setTarget(post.player()));
+                        // Let it reach and start jumping into the wall.
+                        context.awaitTicks(30);
+                        // Sample feet-Y for the "glued airborne, no gravity" signature:
+                        // elevated (well above ground) AND not changing (gravity absent).
+                        // TRUE glue = elevated AND not changing AND airborne (no support
+                        // under the feet). Standing on the step (onGround) is NOT glue —
+                        // that is a nav dead-end, a different problem.
+                        double feetGround = groundY + 1.0; // 81.0
+                        double prevY = context.sync(() -> runner.player().getLocation().getY());
+                        int stillAirborne = 0;
+                        int worstStuck = 0;
+                        double stuckY = 0.0;
+                        for (int tick = 0; tick < 80; tick++) {
+                            context.awaitTicks(1);
+                            double[] yg = context.sync(() -> new double[] {
+                                    runner.player().getLocation().getY(),
+                                    runner.player().isOnGround() ? 1.0 : 0.0 });
+                            double y = yg[0];
+                            boolean onGround = yg[1] > 0.5;
+                            boolean elevated = y > feetGround + 0.6;
+                            boolean still = Math.abs(y - prevY) < 0.02;
+                            if (elevated && still && !onGround) {
+                                if (++stillAirborne > worstStuck) {
+                                    worstStuck = stillAirborne;
+                                    stuckY = y;
+                                }
+                            } else {
+                                stillAirborne = 0;
+                            }
+                            prevY = y;
+                        }
+                        // A glued boxer hovers airborne (no support) for many ticks; a
+                        // healthy one falls, bounces, or rests on a real surface.
+                        context.expect(worstStuck < 8,
+                                "boxer did not glue AIRBORNE to the wall (worst floating run "
+                                        + worstStuck + " ticks at y=" + stuckY + ")");
+                    } finally {
+                        context.syncRun(runner::remove);
+                        context.syncRun(post::remove);
                     }
                 }));
     }

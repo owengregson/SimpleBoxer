@@ -345,6 +345,17 @@ final class BoxerImpl implements Boxer {
         physics.step(input, aimYaw, collisionView);
         pushAwayFromNeighbors();
 
+        // WS1c diagnosis (temporary): trace the sim vs server-entity Y whenever the
+        // boxer is wall-collided, to catch the "glued to the wall, no gravity" bug at
+        // the sim<->server boundary. Behind -Dsimpleboxer.debug; remove once fixed.
+        if (DEBUG && physics.horizontalCollision()) {
+            Location serverLoc = spawned.player().getLocation();
+            logger.info(String.format(
+                    "[debug %s] wallCollide sim=(%.3f,%.3f,%.3f) vy=%.4f onGround=%b | server=(%.3f,%.3f,%.3f)",
+                    name, physics.x(), physics.y(), physics.z(), physics.velocity().y(),
+                    physics.onGround(), serverLoc.getX(), serverLoc.getY(), serverLoc.getZ()));
+        }
+
         // 3. Report movement the way a real client does.
         queueMovement(now);
 
@@ -519,6 +530,14 @@ final class BoxerImpl implements Boxer {
             double y = sync.relativeY() ? physics.y() + sync.y() : sync.y();
             double z = sync.relativeZ() ? physics.z() + sync.z() : sync.z();
             var velocity = physics.velocity();
+            // WS1c diagnosis (temporary): a server position-correction is the prime
+            // suspect for the jump-into-wall "glue" — log every one it sends us.
+            if (DEBUG) {
+                logger.info(String.format(
+                        "[debug %s] POSITION-CORRECTION sim=(%.3f,%.3f,%.3f) -> (%.3f,%.3f,%.3f) relY=%b hColl=%b",
+                        name, physics.x(), physics.y(), physics.z(), x, y, z,
+                        sync.relativeY(), physics.horizontalCollision()));
+            }
             physics.teleport(x, y, z);
             if (sync.velocity() != null) {
                 Inbound.PositionSync.Motion motion = sync.velocity();
