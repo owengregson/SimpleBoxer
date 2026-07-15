@@ -50,8 +50,9 @@ class AdaptiveStrafeTest {
                 Perception.InventoryView.EMPTY, Perception.CombatState.IDLE, 0);
     }
 
+    /** Full-featured adaptive preset (aim break + velocity juke + w-tap sync). */
     private StrafeDecision orbit(Perception p, BrainMemory mem) {
-        return strafe.next(p, StrafeMode.ORBIT, true, mem);
+        return strafe.next(p, StrafeMode.ORBIT, AdaptiveStrafe.PARAMS_WTAP_SYNC, mem);
     }
 
     @Test
@@ -191,7 +192,8 @@ class AdaptiveStrafeTest {
         int maxRunBetweenFlips = 0;
         int run = 0;
         for (int t = 0; t < 60; t++) {
-            StrafeDecision d = strafe.next(noTarget(false), StrafeMode.WEAVE, false, mem);
+            StrafeDecision d = strafe.next(noTarget(false), StrafeMode.WEAVE,
+                    AdaptiveStrafe.PARAMS_WEAVE, mem);
             assertEquals(StrafeMode.WEAVE, d.mode());
             if (d.sign() != prev) {
                 flips++;
@@ -212,7 +214,8 @@ class AdaptiveStrafeTest {
         BrainMemory mem = new BrainMemory(99L);
         int startSign = mem.strafeSign;
         int startFlipIn = mem.strafeFlipIn;
-        StrafeDecision d = strafe.next(withTarget(100.0, Vec3d.ZERO, true), StrafeMode.NONE, true, mem);
+        StrafeDecision d = strafe.next(withTarget(100.0, Vec3d.ZERO, true), StrafeMode.NONE,
+                AdaptiveStrafe.PARAMS_WTAP_SYNC, mem);
         assertEquals(StrafeMode.NONE, d.mode());
         assertEquals(startSign, d.sign(), "NONE echoes the current sign");
         assertEquals(startSign, mem.strafeSign, "NONE leaves the persisted sign untouched");
@@ -222,10 +225,10 @@ class AdaptiveStrafeTest {
     @Test
     void nonAdaptiveOrbitFlipsImmediatelyOnWall() {
         BrainMemory mem = new BrainMemory(3L);
-        strafe.next(noTarget(false), StrafeMode.ORBIT, false, mem); // initial flip seeds cadence
+        strafe.next(noTarget(false), StrafeMode.ORBIT, AdaptiveStrafe.PARAMS_PLAIN, mem); // seed cadence
         int before = mem.strafeSign;
         assertTrue(mem.strafeFlipIn >= AdaptiveStrafe.ORBIT_MIN - 1);
-        StrafeDecision d = strafe.next(noTarget(true), StrafeMode.ORBIT, false, mem);
+        StrafeDecision d = strafe.next(noTarget(true), StrafeMode.ORBIT, AdaptiveStrafe.PARAMS_PLAIN, mem);
         assertNotEquals(before, d.sign(), "a wall must interrupt the orbit and flip the sign");
     }
 

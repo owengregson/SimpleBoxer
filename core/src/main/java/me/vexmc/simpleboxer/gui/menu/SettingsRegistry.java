@@ -103,11 +103,10 @@ final class SettingsRegistry {
                 (s, v) -> s.withCombat(combat(s).rodMax(Math.max(v, s.combat().rodMin()))),
                 "§8Farthest range the boxer will rod-poke from.",
                 "§8(Kept at or above rod min.)"));
-        d.add(SettingDescriptor.toggle("adaptive-strafe", SettingCategory.COMBAT, "Adaptive strafe",
-                Material.COMPASS, s -> s.combat().adaptiveStrafe(),
-                s -> s.withCombat(combat(s).adaptiveStrafe(!s.combat().adaptiveStrafe())),
-                "§8Pick strafe direction from how the target",
-                "§8is tracking — break a tight aim, exploit a miss."));
+        d.add(SettingDescriptor.cycle("strafe-preset", SettingCategory.COMBAT, "Strafe preset",
+                Material.COMPASS, "custom", strafePresetOptions(),
+                "§8How the circle-strafe picks its side.",
+                "§8none / orbit / juke / wtap-sync"));
         d.add(SettingDescriptor.toggle("s-tap", SettingCategory.COMBAT, "S-tap",
                 Material.SUGAR, s -> s.combat().sTap(),
                 s -> s.withCombat(combat(s).sTap(!s.combat().sTap())),
@@ -298,6 +297,16 @@ final class SettingsRegistry {
         return options;
     }
 
+    private static @NotNull List<CycleOption> strafePresetOptions() {
+        List<CycleOption> options = new ArrayList<>();
+        for (Combat.StrafePreset preset : Combat.StrafePreset.values()) {
+            options.add(new CycleOption(BoxerSettingsWriter.token(preset.name()),
+                    s -> s.withCombat(combat(s).strafePreset(preset)),
+                    s -> s.combat().strafePreset() == preset));
+        }
+        return options;
+    }
+
     private static @NotNull List<CycleOption> deathModeOptions() {
         List<CycleOption> options = new ArrayList<>();
         for (Death.Mode mode : List.of(Death.Mode.MANUAL, Death.Mode.AUTO_RESPAWN)) {
@@ -328,31 +337,31 @@ final class SettingsRegistry {
     private record CombatEdit(@NotNull Combat c) {
         @NotNull Combat blockHit(boolean v) {
             return new Combat(v, c.rodKnockback(), c.rodMin(), c.rodMax(),
-                    c.adaptiveStrafe(), c.sTap(), c.missChance());
+                    c.strafePreset(), c.sTap(), c.missChance());
         }
         @NotNull Combat rodKnockback(boolean v) {
             return new Combat(c.blockHit(), v, c.rodMin(), c.rodMax(),
-                    c.adaptiveStrafe(), c.sTap(), c.missChance());
+                    c.strafePreset(), c.sTap(), c.missChance());
         }
         @NotNull Combat rodMin(double v) {
             return new Combat(c.blockHit(), c.rodKnockback(), v, c.rodMax(),
-                    c.adaptiveStrafe(), c.sTap(), c.missChance());
+                    c.strafePreset(), c.sTap(), c.missChance());
         }
         @NotNull Combat rodMax(double v) {
             return new Combat(c.blockHit(), c.rodKnockback(), c.rodMin(), v,
-                    c.adaptiveStrafe(), c.sTap(), c.missChance());
+                    c.strafePreset(), c.sTap(), c.missChance());
         }
-        @NotNull Combat adaptiveStrafe(boolean v) {
+        @NotNull Combat strafePreset(@NotNull Combat.StrafePreset v) {
             return new Combat(c.blockHit(), c.rodKnockback(), c.rodMin(), c.rodMax(),
                     v, c.sTap(), c.missChance());
         }
         @NotNull Combat sTap(boolean v) {
             return new Combat(c.blockHit(), c.rodKnockback(), c.rodMin(), c.rodMax(),
-                    c.adaptiveStrafe(), v, c.missChance());
+                    c.strafePreset(), v, c.missChance());
         }
         @NotNull Combat missChance(double v) {
             return new Combat(c.blockHit(), c.rodKnockback(), c.rodMin(), c.rodMax(),
-                    c.adaptiveStrafe(), c.sTap(), v);
+                    c.strafePreset(), c.sTap(), v);
         }
     }
 

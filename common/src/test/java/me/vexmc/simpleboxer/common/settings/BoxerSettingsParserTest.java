@@ -163,7 +163,8 @@ class BoxerSettingsParserTest {
         assertTrue(DifficultyPresets.SWEAT.death().dropItemsOnDeath());
         assertTrue(DifficultyPresets.SWEAT.combat().blockHit());
         assertTrue(DifficultyPresets.SWEAT.combat().rodKnockback());
-        assertTrue(DifficultyPresets.SWEAT.combat().adaptiveStrafe());
+        assertEquals(BoxerSettings.Combat.StrafePreset.WTAP_SYNC,
+                DifficultyPresets.SWEAT.combat().strafePreset());
         assertTrue(DifficultyPresets.SWEAT.selfHeal().enabled());
         assertTrue(DifficultyPresets.SWEAT.hunger().natural());
     }

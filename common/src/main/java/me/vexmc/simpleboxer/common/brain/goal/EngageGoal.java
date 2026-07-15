@@ -108,7 +108,7 @@ public final class EngageGoal implements Goal {
             moveDir = orbit(p, s, toTarget, t.distance(), stop, mem);
         } else { // STRAFE_WEAVE
             AdaptiveStrafe.StrafeDecision weave =
-                    strafe.next(p, AdaptiveStrafe.StrafeMode.WEAVE, false, mem);
+                    strafe.next(p, AdaptiveStrafe.StrafeMode.WEAVE, AdaptiveStrafe.PARAMS_WEAVE, mem);
             moveDir = toTarget.add(tangent(toTarget, weave.sign()).scale(0.6)).horizontalNormalized();
         }
 
@@ -137,7 +137,7 @@ public final class EngageGoal implements Goal {
             return toTarget;
         }
         AdaptiveStrafe.StrafeDecision sd =
-                strafe.next(p, AdaptiveStrafe.StrafeMode.ORBIT, s.combat().adaptiveStrafe(), mem);
+                strafe.next(p, AdaptiveStrafe.StrafeMode.ORBIT, paramsFor(s.combat().strafePreset()), mem);
         Vec3d tangent = tangent(toTarget, sd.sign());
         double radiusError = distance - radius;
         double forwardBias;
@@ -153,6 +153,16 @@ public final class EngageGoal implements Goal {
             forwardBias = cycle[0] < 2 ? ORBIT_INBAND_FORWARD : 0.0;
         }
         return tangent.add(toTarget.scale(forwardBias)).horizontalNormalized();
+    }
+
+    /** Map the configured circle-strafe preset to its {@link AdaptiveStrafe} tuning. */
+    private static AdaptiveStrafe.StrafeParams paramsFor(BoxerSettings.Combat.StrafePreset preset) {
+        return switch (preset) {
+            case NONE -> AdaptiveStrafe.PARAMS_PLAIN;
+            case ORBIT -> AdaptiveStrafe.PARAMS_ORBIT;
+            case JUKE -> AdaptiveStrafe.PARAMS_JUKE;
+            case WTAP_SYNC -> AdaptiveStrafe.PARAMS_WTAP_SYNC;
+        };
     }
 
     /** Rotate a horizontal unit vector 90° about +Y: sign +1 = left (CCW), -1 = right. */

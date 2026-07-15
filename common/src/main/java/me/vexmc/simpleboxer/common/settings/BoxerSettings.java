@@ -138,15 +138,30 @@ public record BoxerSettings(
      *                       target back before committing to a melee combo.
      * @param rodMin         nearest range (blocks) the boxer will rod-poke from.
      * @param rodMax         farthest range (blocks) the boxer will rod-poke from.
-     * @param adaptiveStrafe choose strafe direction from how the opponent is
-     *                       tracking the boxer (break a tight aim, exploit a mistrack).
+     * @param strafePreset   how the circle-strafe chooses its side: {@code NONE}
+     *                       (a plain non-adaptive circle), {@code ORBIT} (break a
+     *                       tight aim), {@code JUKE} (also juke off the opponent's
+     *                       motion), or {@code WTAP_SYNC} (time jukes to the
+     *                       sprint re-press). Read only in STRAFE_CIRCLE style.
      * @param sTap           straight-line s-tap combos (sprint reset, no A/D strafe).
      * @param missChance     fraction of clicks intentionally aimed off-target [0,1].
      */
     public record Combat(boolean blockHit, boolean rodKnockback, double rodMin, double rodMax,
-            boolean adaptiveStrafe, boolean sTap, double missChance) {
+            @NotNull StrafePreset strafePreset, boolean sTap, double missChance) {
 
-        public static final Combat OFF = new Combat(false, false, 3.0, 6.0, false, false, 0.0);
+        /**
+         * The named circle-strafe behaviors. {@code NONE} is a plain circle;
+         * the rest read the opponent's aim (and, from {@code JUKE} up, motion)
+         * to decisively choose the side to open.
+         */
+        public enum StrafePreset {
+            NONE,
+            ORBIT,
+            JUKE,
+            WTAP_SYNC
+        }
+
+        public static final Combat OFF = new Combat(false, false, 3.0, 6.0, StrafePreset.NONE, false, 0.0);
 
         public Combat {
             if (rodMin < 0.5 || rodMin > 6.0) {

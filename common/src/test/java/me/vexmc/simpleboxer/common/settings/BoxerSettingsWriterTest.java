@@ -57,7 +57,8 @@ class BoxerSettingsWriterTest {
                 new Movement(Movement.Style.STRAFE_CIRCLE, 1.5, true), false, false,
                 BoxerSettings.InvincibleMode.LEGACY_RESTORE,
                 new BoxerSettings.Death(true, BoxerSettings.Death.Mode.MANUAL),
-                new BoxerSettings.Combat(true, true, 2.5, 5.5, true, true, 0.07),
+                new BoxerSettings.Combat(true, true, 2.5, 5.5,
+                        BoxerSettings.Combat.StrafePreset.JUKE, true, 0.07),
                 new BoxerSettings.SelfHeal(true, 7.0, 17.0, 4),
                 new BoxerSettings.Items(true, true, 1, 2, 3, 4, 5, true, true, 5),
                 new BoxerSettings.Hunger(true, 12));

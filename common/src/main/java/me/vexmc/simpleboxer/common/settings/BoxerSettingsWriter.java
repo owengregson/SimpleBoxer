@@ -65,7 +65,7 @@ public final class BoxerSettingsWriter {
         combat.set("rod-knockback", settings.combat().rodKnockback());
         combat.set("rod-min", settings.combat().rodMin());
         combat.set("rod-max", settings.combat().rodMax());
-        combat.set("adaptive-strafe", settings.combat().adaptiveStrafe());
+        combat.set("strafe-preset", token(settings.combat().strafePreset().name()));
         combat.set("s-tap", settings.combat().sTap());
         combat.set("miss-chance", settings.combat().missChance());
 

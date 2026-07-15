@@ -23,7 +23,8 @@ class RodPokeGoalTest {
     // Default rod band is [3, 6]; rod slot 1, weapon slot 0.
     private static BoxerSettings enabled() {
         return BoxerSettings.DEFAULTS.withCombat(
-                new BoxerSettings.Combat(false, true, 3.0, 6.0, false, false, 0.0));
+                new BoxerSettings.Combat(false, true, 3.0, 6.0,
+                        BoxerSettings.Combat.StrafePreset.NONE, false, 0.0));
     }
 
     private static Supplier<BoxerSettings> sup(BoxerSettings s) {

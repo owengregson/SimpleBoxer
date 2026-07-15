@@ -115,8 +115,12 @@ defaults:
     rod-knockback: false
     rod-min: 3.0
     rod-max: 6.0
-    # Choose strafe direction from how the opponent is aiming at the boxer.
-    adaptive-strafe: false
+    # Circle-strafe side selection (STRAFE_CIRCLE style only):
+    #   none      - a plain non-adaptive circle
+    #   orbit     - break a tight aim (strafe to the side their crosshair lags)
+    #   juke      - also juke opposite the opponent's motion to open the angle
+    #   wtap-sync - time jukes to the sprint re-press
+    strafe-preset: none
     # Straight-line s-tap combos (sprint reset, no A/D strafe).
     s-tap: false
     # Fraction of clicks intentionally aimed off-target (0-1).

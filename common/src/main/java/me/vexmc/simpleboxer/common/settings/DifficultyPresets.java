@@ -74,7 +74,7 @@ public final class DifficultyPresets {
             15, 13.0, 0.15, new AimParams(0.70, 0.25, 80.0), 3.0, 5.0,
             new WTap(true, 0, 2), new Movement(Movement.Style.STRAFE_CIRCLE, 0.0, true), true, true,
             InvincibleMode.ZERO_DAMAGE, Death.RESPAWN_KEEP,
-            new Combat(false, false, 3.0, 6.0, true, false, 0.0), SelfHeal.OFF,
+            new Combat(false, false, 3.0, 6.0, Combat.StrafePreset.JUKE, false, 0.0), SelfHeal.OFF,
             FIXTURE_ITEMS, Hunger.DEFAULT);
 
     /** The machine: zero ping, locked aim, saturated clicks — a calibrator. */
@@ -95,7 +95,7 @@ public final class DifficultyPresets {
             new WTap(true, 0, 2), new Movement(Movement.Style.STRAFE_CIRCLE, 0.0, true),
             false, false,
             InvincibleMode.ZERO_DAMAGE, Death.DEFAULT,
-            new Combat(true, true, 3.0, 5.5, true, false, 0.03),
+            new Combat(true, true, 3.0, 5.5, Combat.StrafePreset.WTAP_SYNC, false, 0.03),
             new SelfHeal(true, 8.0, 18.0, 6),
             // The sweat showcase actually carries a finite splash-pot supply so its
             // self-heal has something to throw (and can run out mid-fight).

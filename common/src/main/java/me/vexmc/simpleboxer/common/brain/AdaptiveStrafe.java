@@ -91,6 +91,54 @@ public final class AdaptiveStrafe {
     }
 
     /**
+     * The per-preset tuning the caller threads in, promoted out of this module's
+     * bare constants so each named {@code StrafePreset} (see
+     * {@code BoxerSettings.Combat}) carries its own cadence/threshold/dwell and
+     * chooses which adaptive signals are live:
+     *
+     * <ul>
+     *   <li>{@code adaptive} — ORBIT reads the opponent's aim/motion instead of
+     *       running the plain slow circle cadence.</li>
+     *   <li>{@code velocityJuke} — consult the opponent's tangential velocity.</li>
+     *   <li>{@code wtapSync} — defer a discretionary juke onto the sprint re-press.</li>
+     * </ul>
+     */
+    public record StrafeParams(
+            int weaveMin, int weaveMax, int orbitMin, int orbitMax,
+            double trackThreshold, int minDwell, int dwellJitter, double velocityJukeThreshold,
+            boolean adaptive, boolean velocityJuke, boolean wtapSync) {}
+
+    /** WEAVE style: short jittery cadence, no aim reading. */
+    public static final StrafeParams PARAMS_WEAVE = new StrafeParams(
+            WEAVE_MIN, WEAVE_MAX, ORBIT_MIN, ORBIT_MAX, TRACK_THRESHOLD_DEG_PER_TICK,
+            ADAPTIVE_MIN_DWELL, ADAPTIVE_DWELL_JITTER, VELOCITY_JUKE_THRESHOLD,
+            false, false, false);
+
+    /** {@code NONE} preset: a plain, non-adaptive circle on the slow cadence. */
+    public static final StrafeParams PARAMS_PLAIN = new StrafeParams(
+            WEAVE_MIN, WEAVE_MAX, ORBIT_MIN, ORBIT_MAX, TRACK_THRESHOLD_DEG_PER_TICK,
+            ADAPTIVE_MIN_DWELL, ADAPTIVE_DWELL_JITTER, VELOCITY_JUKE_THRESHOLD,
+            false, false, false);
+
+    /** {@code ORBIT} preset: steady adaptive circle — break tight aim, no velocity juke. */
+    public static final StrafeParams PARAMS_ORBIT = new StrafeParams(
+            WEAVE_MIN, WEAVE_MAX, ORBIT_MIN, ORBIT_MAX, TRACK_THRESHOLD_DEG_PER_TICK,
+            6, 6, VELOCITY_JUKE_THRESHOLD,
+            true, false, false);
+
+    /** {@code JUKE} preset: eager, short-dwell jukes off both aim and opponent motion. */
+    public static final StrafeParams PARAMS_JUKE = new StrafeParams(
+            WEAVE_MIN, WEAVE_MAX, ORBIT_MIN, ORBIT_MAX, 2.0,
+            3, 4, VELOCITY_JUKE_THRESHOLD,
+            true, true, false);
+
+    /** {@code WTAP_SYNC} preset: adaptive jukes timed to the sprint-reset re-press. */
+    public static final StrafeParams PARAMS_WTAP_SYNC = new StrafeParams(
+            WEAVE_MIN, WEAVE_MAX, ORBIT_MIN, ORBIT_MAX, TRACK_THRESHOLD_DEG_PER_TICK,
+            5, 6, VELOCITY_JUKE_THRESHOLD,
+            true, true, true);
+
+    /**
      * The decision: {@code sign} is the lateral direction the caller feeds to its
      * tangential-heading math ({@code +1}/{@code -1}), {@code mode} echoes what
      * was applied so the caller can log/branch on it.
@@ -100,34 +148,35 @@ public final class AdaptiveStrafe {
     /**
      * Advance the strafe state one tick and return the direction to sidestep.
      *
-     * @param p        the current perception snapshot
-     * @param mode     the sidestep style requested by the calling goal
-     * @param adaptive whether ORBIT should read the opponent's tracking (ignored for WEAVE/NONE)
-     * @param mem      the owning boxer's mutable scratchpad (mutated in place)
+     * @param p      the current perception snapshot
+     * @param mode   the sidestep style requested by the calling goal
+     * @param params the per-preset tuning + which adaptive signals are live
+     * @param mem    the owning boxer's mutable scratchpad (mutated in place)
      * @return the sign to strafe and the mode that produced it
      */
     public @NotNull StrafeDecision next(@NotNull Perception p, @NotNull StrafeMode mode,
-                                        boolean adaptive, @NotNull BrainMemory mem) {
+                                        @NotNull StrafeParams params, @NotNull BrainMemory mem) {
         return switch (mode) {
             // No sidestep: leave all cadence state untouched and echo the current bearing.
             case NONE -> new StrafeDecision(mem.strafeSign, StrafeMode.NONE);
-            case WEAVE -> new StrafeDecision(fixedCadence(mem, WEAVE_MIN, WEAVE_MAX), StrafeMode.WEAVE);
-            case ORBIT -> new StrafeDecision(orbit(p, adaptive, mem), StrafeMode.ORBIT);
+            case WEAVE -> new StrafeDecision(
+                    fixedCadence(mem, params.weaveMin(), params.weaveMax()), StrafeMode.WEAVE);
+            case ORBIT -> new StrafeDecision(orbit(p, params, mem), StrafeMode.ORBIT);
         };
     }
 
     /** ORBIT: adaptive juke off the opponent's aim when possible, else a slow timed circle. */
-    private int orbit(@NotNull Perception p, boolean adaptive, @NotNull BrainMemory mem) {
-        if (adaptive && p.hasTarget()) {
-            return adaptiveOrbit(p, mem);
+    private int orbit(@NotNull Perception p, @NotNull StrafeParams params, @NotNull BrainMemory mem) {
+        if (params.adaptive() && p.hasTarget()) {
+            return adaptiveOrbit(p, params, mem);
         }
         // Non-adaptive: flip on the slow cadence, or immediately if a wall stalled the circle.
         if (p.self().horizontalCollision()) {
             flip(mem);
-            mem.strafeFlipIn = rollCadence(mem, ORBIT_MIN, ORBIT_MAX);
+            mem.strafeFlipIn = rollCadence(mem, params.orbitMin(), params.orbitMax());
             return mem.strafeSign;
         }
-        return fixedCadence(mem, ORBIT_MIN, ORBIT_MAX);
+        return fixedCadence(mem, params.orbitMin(), params.orbitMax());
     }
 
     /**
@@ -151,7 +200,8 @@ public final class AdaptiveStrafe {
      * re-press tick ({@link BrainMemory#wtapRepressed}) so the juke and the fresh
      * sprint knock arrive together.
      */
-    private int adaptiveOrbit(@NotNull Perception p, @NotNull BrainMemory mem) {
+    private int adaptiveOrbit(@NotNull Perception p, @NotNull StrafeParams params,
+            @NotNull BrainMemory mem) {
         int[] scratch = mem.ints(SCRATCH_ID, 3);
         if (scratch[DWELL] > 0) {
             scratch[DWELL]--;
@@ -163,7 +213,7 @@ public final class AdaptiveStrafe {
         if (p.self().horizontalCollision()) {
             flip(mem);
             scratch[PENDING] = 0;
-            armDwell(scratch, mem);
+            armDwell(scratch, mem, params);
             mem.wtapRepressed = false;
             return mem.strafeSign;
         }
@@ -173,23 +223,23 @@ public final class AdaptiveStrafe {
         mem.wtapRepressed = false;
 
         // A change stashed on a previous tick lands the moment sprint re-presses.
-        if (repress && scratch[PENDING] != 0) {
+        if (params.wtapSync() && repress && scratch[PENDING] != 0) {
             mem.strafeSign = scratch[PENDING];
             scratch[PENDING] = 0;
-            armDwell(scratch, mem);
+            armDwell(scratch, mem, params);
             return mem.strafeSign;
         }
 
-        int desired = chooseSide(p, mem, scratch);
+        int desired = chooseSide(p, params, mem, scratch);
         if (desired != 0 && desired != mem.strafeSign && scratch[DWELL] <= 0) {
             // Mid w-tap cycle: stash the juke and hold, so it lands with the sprint
             // re-press instead of leaking out during the forward-released window.
-            if (wtapCycleActive(mem)) {
+            if (params.wtapSync() && wtapCycleActive(mem)) {
                 scratch[PENDING] = desired;
                 return mem.strafeSign;
             }
             mem.strafeSign = desired;
-            armDwell(scratch, mem);
+            armDwell(scratch, mem, params);
         }
         return mem.strafeSign;
     }
@@ -199,23 +249,26 @@ public final class AdaptiveStrafe {
      * hold. Tight-track aim-break outranks the velocity juke, which outranks the
      * slow calm-aim cadence.
      */
-    private int chooseSide(@NotNull Perception p, @NotNull BrainMemory mem, int[] scratch) {
+    private int chooseSide(@NotNull Perception p, @NotNull StrafeParams params,
+            @NotNull BrainMemory mem, int[] scratch) {
         Perception.TargetState t = p.target();
 
         // 1. Break a tight track: strafe to the side their sweep is lagging away from.
         double signed = t.signedTrackRateDegPerTick();
-        if (Math.abs(signed) > TRACK_THRESHOLD_DEG_PER_TICK) {
+        if (Math.abs(signed) > params.trackThreshold()) {
             return signed > 0 ? 1 : -1;
         }
 
         // 2. Open the angle against the opponent's tangential motion.
-        int velSign = velocityJukeSign(p.self(), t);
-        if (velSign != 0) {
-            return velSign;
+        if (params.velocityJuke()) {
+            int velSign = velocityJukeSign(p.self(), t, params.velocityJukeThreshold());
+            if (velSign != 0) {
+                return velSign;
+            }
         }
 
         // 3. Calm aim: keep a slow seeded juke so the circle isn't perfectly periodic.
-        return calmCadence(mem, scratch);
+        return calmCadence(mem, params, scratch);
     }
 
     /**
@@ -225,14 +278,14 @@ public final class AdaptiveStrafe {
      * boxer→target direction (matching {@code EngageGoal.tangent}).
      */
     private int velocityJukeSign(@NotNull Perception.SelfState self,
-            @NotNull Perception.TargetState t) {
+            @NotNull Perception.TargetState t, double threshold) {
         Vec3d toTarget = new Vec3d(t.x() - self.x(), 0.0, t.z() - self.z()).horizontalNormalized();
         if (toTarget.lengthSqr() < 1.0E-8) {
             return 0;
         }
         // tangent(+1) = (-dir.z, 0, dir.x) — the left/CCW sidestep direction.
         double along = t.velocity().x() * (-toTarget.z()) + t.velocity().z() * toTarget.x();
-        if (Math.abs(along) < VELOCITY_JUKE_THRESHOLD) {
+        if (Math.abs(along) < threshold) {
             return 0;
         }
         return along > 0 ? -1 : 1;
@@ -242,18 +295,18 @@ public final class AdaptiveStrafe {
      * The slow calm-aim juke: propose the flipped side when the seeded timer
      * expires. A fresh (zero) counter seeds a full cadence WITHOUT flipping, so
      * entering a calm circle doesn't juke on the first tick — the flip only comes
-     * after a genuine {@code ORBIT_MIN..ORBIT_MAX} interval.
+     * after a genuine {@code orbitMin..orbitMax} interval.
      */
-    private int calmCadence(@NotNull BrainMemory mem, int[] scratch) {
+    private int calmCadence(@NotNull BrainMemory mem, @NotNull StrafeParams params, int[] scratch) {
         if (scratch[CALM] > 1) {
             scratch[CALM]--;
             return 0;
         }
         if (scratch[CALM] == 1) {
-            scratch[CALM] = rollCadence(mem, ORBIT_MIN, ORBIT_MAX);
+            scratch[CALM] = rollCadence(mem, params.orbitMin(), params.orbitMax());
             return mem.strafeSign >= 0 ? -1 : 1;
         }
-        scratch[CALM] = rollCadence(mem, ORBIT_MIN, ORBIT_MAX); // seed, no flip yet
+        scratch[CALM] = rollCadence(mem, params.orbitMin(), params.orbitMax()); // seed, no flip yet
         return 0;
     }
 
@@ -263,8 +316,8 @@ public final class AdaptiveStrafe {
     }
 
     /** Re-arm the min-dwell with seeded jitter after a discretionary side change. */
-    private void armDwell(int[] scratch, @NotNull BrainMemory mem) {
-        scratch[DWELL] = ADAPTIVE_MIN_DWELL + mem.rng.nextInt(ADAPTIVE_DWELL_JITTER);
+    private void armDwell(int[] scratch, @NotNull BrainMemory mem, @NotNull StrafeParams params) {
+        scratch[DWELL] = params.minDwell() + mem.rng.nextInt(Math.max(1, params.dwellJitter()));
     }
 
     /**
