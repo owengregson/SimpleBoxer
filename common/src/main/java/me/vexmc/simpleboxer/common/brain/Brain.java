@@ -125,7 +125,10 @@ public final class Brain {
         if (intent.jump() == JumpHint.JUMP) {
             jump = JumpHint.JUMP;
         }
-        MoveInput move = motor.toInput(heading, aim.yaw(), intent.wantSprint(), jump, false);
+        // Consume the collision-aware ease-off: duty-cycle the softened forward for
+        // heading.speedScale() < 1 and sneak near a ledge, keyed off a monotonic phase.
+        MoveInput move = motor.toInput(heading, aim.yaw(), intent.wantSprint(), jump, false,
+                memory.motorTick++);
 
         // 3. Actions: the goal/routine's item action, then CPS-clocked clicks.
         List<ActionIntent> actions = new ArrayList<>(2);

@@ -142,4 +142,64 @@ class MotorQuantizerTest {
         assertEquals(1.0, in.forward());
         assertEquals(0.0, in.strafe());
     }
+
+    /* speedScale < 1 duty-cycles the DIGITAL forward key across ticks: the average
+     * press count tracks the pace, every key stays in {-1,0,1}, and the strafe axis
+     * is never touched by the ease-off. This is the previously-dropped no-op. */
+    @Test
+    void speedScaleDutyCyclesForwardKey() {
+        Vec3d fwd = worldDirFor(1.0, 0.0, 0f); // pure forward at yaw 0
+
+        // Half pace: forward held on exactly half the ticks over two full periods.
+        int pressedHalf = 0;
+        for (int tick = 0; tick < 2 * MotorQuantizer.DUTY_PERIOD; tick++) {
+            MoveInput in = motor.toInput(new MoveHeading(fwd, false, 0.5), 0f, true,
+                    Intent.JumpHint.NONE, false, tick);
+            assertTrue(isDigital(in.forward()), "forward not digital: " + in.forward());
+            assertEquals(0.0, in.strafe(), "ease-off must not touch strafe at tick " + tick);
+            if (in.forward() == 1.0) {
+                pressedHalf++;
+            }
+        }
+        assertEquals(MotorQuantizer.DUTY_PERIOD, pressedHalf,
+                "speedScale 0.5 should press forward on half the ticks");
+
+        // Full pace: forward held every tick (no ease-off).
+        for (int tick = 0; tick < 2 * MotorQuantizer.DUTY_PERIOD; tick++) {
+            MoveInput in = motor.toInput(new MoveHeading(fwd, false, 1.0), 0f, true,
+                    Intent.JumpHint.NONE, false, tick);
+            assertEquals(1.0, in.forward(), "full speed should always hold forward, tick " + tick);
+        }
+
+        // Crawl pace: forward held on a quarter of the ticks (round(0.25*4)=1 of 4).
+        int pressedCrawl = 0;
+        for (int tick = 0; tick < 2 * MotorQuantizer.DUTY_PERIOD; tick++) {
+            MoveInput in = motor.toInput(new MoveHeading(fwd, false, 0.25), 0f, true,
+                    Intent.JumpHint.NONE, false, tick);
+            if (in.forward() == 1.0) {
+                pressedCrawl++;
+            }
+        }
+        assertEquals(2, pressedCrawl, "speedScale 0.25 should press forward a quarter of the ticks");
+    }
+
+    /* A near-ledge heading forces sneak — the intended soft edge ease-off — on both
+     * overloads, even when the caller passes sneak=false, without disturbing forward. */
+    @Test
+    void nearLedgePressesSneak() {
+        Vec3d fwd = worldDirFor(1.0, 0.0, 0f);
+        MoveHeading nearLedge = new MoveHeading(fwd, true, 1.0);
+
+        MoveInput duty = motor.toInput(nearLedge, 0f, false, Intent.JumpHint.NONE, false, 0);
+        assertTrue(duty.sneak(), "near a ledge the motor should press sneak");
+        assertEquals(1.0, duty.forward(), "full-speed near-ledge still keys forward");
+
+        MoveInput plain = motor.toInput(nearLedge, 0f, false, Intent.JumpHint.NONE, false);
+        assertTrue(plain.sneak(), "sneak-on-ledge also holds on the plain overload");
+
+        // A heading NOT near a ledge leaves sneak as the caller passed it.
+        MoveInput clear = motor.toInput(new MoveHeading(fwd, false, 1.0), 0f, false,
+                Intent.JumpHint.NONE, false, 0);
+        assertTrue(!clear.sneak(), "no phantom sneak when clear of ledges");
+    }
 }

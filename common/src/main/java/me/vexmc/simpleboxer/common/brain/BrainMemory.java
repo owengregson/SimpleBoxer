@@ -23,6 +23,10 @@ public final class BrainMemory {
     public @Nullable String incumbentGoal;
     public int dwellTicks;
 
+    /* Monotonic decision-tick counter — the phase the motor duty-cycles a softened
+     * forward key against (easing off near walls/ledges without a fractional impulse). */
+    public int motorTick;
+
     /* Strafe state (moved out of BoxerImpl). */
     public int strafeSign = 1;
     public int strafeFlipIn;
