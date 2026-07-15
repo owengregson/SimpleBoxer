@@ -11,6 +11,7 @@ import org.bukkit.Material;
 import org.bukkit.World;
 import org.bukkit.potion.PotionEffect;
 import org.bukkit.potion.PotionEffectType;
+import org.bukkit.util.Vector;
 import org.jetbrains.annotations.NotNull;
 
 /**
@@ -233,6 +234,78 @@ public final class MovementSuite {
                     } finally {
                         context.syncRun(runner::remove);
                         context.syncRun(post::remove);
+                    }
+                }),
+
+                new TestCase("movement: a boxer knocked up into a bare wall slides down",
+                        context -> {
+                    // WS1c faithful repro of the reported bug: loft an IDLE boxer UP and
+                    // INTO a tall wall with NOTHING to stand on, then watch whether gravity
+                    // slides it back down the wall face (vanilla) or it "glues" there. With
+                    // -Dsimpleboxer.debug the wallCollide trace logs sim-vs-server Y, so a
+                    // stuck ENTITY (sim falls, server frozen) is distinguishable from a stuck
+                    // SIM. No step, no ledge — the pure "airborne against a wall" case.
+                    World world = Bukkit.getWorlds().get(0);
+                    Location center = context.sync(() -> Arenas.arena(world, 340, 100));
+                    int baseX = 340;
+                    int baseZ = 100;
+                    int groundY = 80; // stone top at y=81 (feet ground)
+                    context.syncRun(() -> {
+                        for (int x = baseX - 6; x <= baseX + 6; x++) {
+                            for (int dy = 1; dy <= 4; dy++) {
+                                world.getBlockAt(x, groundY + dy, baseZ + 2).setType(Material.STONE);
+                            }
+                        }
+                    });
+                    // An idle dummy standing one block in front of the wall.
+                    Boxer victim = Arenas.spawn("WallSlider",
+                            center.clone().add(0, 0, 1), DifficultyPresets.DUMMY);
+                    try {
+                        context.awaitTicks(10); // settle on the ground
+                        double feetGround = groundY + 1.0; // 81.0
+                        // Loft it UP and INTO the wall — a jump/knock into the wall face.
+                        // A boxer captures its own SetEntityMotion, so this reaches the sim.
+                        context.syncRun(() -> victim.player().setVelocity(new Vector(0, 0.62, 0.55)));
+                        double prevY = context.sync(() -> victim.player().getLocation().getY());
+                        int airborneStill = 0;
+                        int worstStuck = 0;
+                        double stuckY = 0.0;
+                        double maxY = prevY;
+                        boolean everElevated = false;
+                        for (int tick = 0; tick < 60; tick++) {
+                            context.awaitTicks(1);
+                            double[] yg = context.sync(() -> new double[] {
+                                    victim.player().getLocation().getY(),
+                                    victim.player().isOnGround() ? 1.0 : 0.0 });
+                            double y = yg[0];
+                            boolean onGround = yg[1] > 0.5;
+                            maxY = Math.max(maxY, y);
+                            if (y > feetGround + 0.4) {
+                                everElevated = true;
+                            }
+                            boolean elevated = y > feetGround + 0.4;
+                            boolean still = Math.abs(y - prevY) < 0.02;
+                            if (elevated && still && !onGround) {
+                                if (++airborneStill > worstStuck) {
+                                    worstStuck = airborneStill;
+                                    stuckY = y;
+                                }
+                            } else {
+                                airborneStill = 0;
+                            }
+                            prevY = y;
+                        }
+                        double finalY = context.sync(() -> victim.player().getLocation().getY());
+                        boolean finalGround = context.sync(() -> victim.player().isOnGround());
+                        context.expect(everElevated,
+                                "the knock actually lofted it against the wall (maxY " + maxY + ")");
+                        context.expect(worstStuck < 8,
+                                "boxer slid DOWN the wall, not glued (worst glued run " + worstStuck
+                                        + " ticks at y=" + stuckY + ")");
+                        context.expect(finalY < feetGround + 0.3 && finalGround,
+                                "ended back on the ground (y=" + finalY + ", onGround=" + finalGround + ")");
+                    } finally {
+                        context.syncRun(victim::remove);
                     }
                 }));
     }
