@@ -24,6 +24,20 @@ public final class EngageGoal implements Goal {
     public static final double BASE_UTILITY = 0.5;
     private static final double DEFAULT_ORBIT_RADIUS = 2.75;
 
+    /**
+     * How far outside the ring the boxer already circles while closing. Wider
+     * than the old {@code 1.5} so it sidesteps from ~5.75 blocks rather than only
+     * once inside ~4.25 — the approach itself is a strafe, not a straight rush.
+     */
+    private static final double ORBIT_ENGAGE_MARGIN = 3.0;
+
+    /**
+     * In-band forward pulse. Much smaller than the old {@code 0.6} so the ring
+     * heading stays strongly tangential (a real circle) instead of being diluted
+     * toward the target — sprint still re-arms on the pulse ticks.
+     */
+    private static final double ORBIT_INBAND_FORWARD = 0.35;
+
     private final Supplier<BoxerSettings> settings;
     private final AdaptiveStrafe strafe;
 
@@ -118,8 +132,8 @@ public final class EngageGoal implements Goal {
     private Vec3d orbit(Perception p, BoxerSettings s, Vec3d toTarget, double distance,
             double stop, BrainMemory mem) {
         double radius = Math.max(DEFAULT_ORBIT_RADIUS, stop);
-        // Approach phase: still far — just close the gap.
-        if (distance > radius + 1.5) {
+        // Approach phase: only far outside the (widened) ring do we rush straight.
+        if (distance > radius + ORBIT_ENGAGE_MARGIN) {
             return toTarget;
         }
         AdaptiveStrafe.StrafeDecision sd =
@@ -128,14 +142,15 @@ public final class EngageGoal implements Goal {
         double radiusError = distance - radius;
         double forwardBias;
         if (radiusError > 0.6) {
-            forwardBias = 1.0; // outside the ring: close in
+            forwardBias = 1.0; // outside the ring: close in (but already strafing)
         } else if (radiusError < -0.6) {
             forwardBias = -0.8; // inside the ring: back off
         } else {
-            // In the band: hold the ring, pulsing forward to keep sprint legal.
+            // In the band: hold the ring, pulsing a SMALL forward to keep sprint legal
+            // without diluting the tangential authority into a spiral.
             int[] cycle = mem.ints("engageOrbit", 1);
             cycle[0] = (cycle[0] + 1) % 5;
-            forwardBias = cycle[0] < 2 ? 0.6 : 0.0;
+            forwardBias = cycle[0] < 2 ? ORBIT_INBAND_FORWARD : 0.0;
         }
         return tangent.add(toTarget.scale(forwardBias)).horizontalNormalized();
     }
