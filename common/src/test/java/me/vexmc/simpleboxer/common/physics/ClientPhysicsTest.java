@@ -287,6 +287,25 @@ class ClientPhysicsTest {
     }
 
     @Test
+    void diagonalIntoWallPreservesParallelVelocity() {
+        // A body moving diagonally into a wall slides ALONG it — vanilla collide
+        // zeroes only the blocked axis. Pins the physics slide independently of the
+        // brain's steering (the "sticking" fix lives upstream, not here).
+        FlatWorld world = stone();
+        world.extras.add(new Box(-5.0, 0.0, 2.0, 5.0, 3.0, 3.0)); // Z-facing wall at z = 2
+        ClientPhysics physics = grounded(world);
+        double startX = physics.x();
+        physics.applyVelocity(0.3, 0.0, 0.9); // diagonal: +X (parallel) and +Z (into wall)
+        for (int tick = 0; tick < 10; tick++) {
+            physics.step(MoveInput.IDLE, 0.0f, world);
+        }
+        // Z clamps at the wall face; X kept moving — the parallel component survived.
+        assertEquals(2.0 - 0.3, physics.z(), 1.0E-7, "z stopped at the wall face");
+        assertTrue(physics.x() > startX + 0.05,
+                "slid along the wall in x (parallel velocity preserved, not glued)");
+    }
+
+    @Test
     void stepsUpASlabWhileWalking() {
         FlatWorld world = stone();
         world.extras.add(new Box(-5.0, 0.0, 1.0, 5.0, 0.5, 9.0));
