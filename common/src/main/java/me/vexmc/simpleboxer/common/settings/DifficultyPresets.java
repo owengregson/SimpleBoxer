@@ -39,7 +39,7 @@ public final class DifficultyPresets {
      * fixture that spars forever never has its sword or armor wear out. (The
      * MORTAL {@code sweat} showcase wears its gear like a real player.)
      */
-    private static final Items FIXTURE_ITEMS = new Items(false, false, 0, 1, 2, 3, 4, true);
+    private static final Items FIXTURE_ITEMS = new Items(false, false, 0, 1, 2, 3, 4, true, false, 0);
 
     /** Stands still, never attacks — the punching bag. */
     public static final BoxerSettings DUMMY = new BoxerSettings(
@@ -97,7 +97,9 @@ public final class DifficultyPresets {
             InvincibleMode.ZERO_DAMAGE, Death.DEFAULT,
             new Combat(true, true, 3.0, 5.5, true, false, 0.03),
             new SelfHeal(true, 8.0, 18.0, 6),
-            new Items(true, false, 0, 1, 2, 3, 4, false),
+            // The sweat showcase actually carries a finite splash-pot supply so its
+            // self-heal has something to throw (and can run out mid-fight).
+            new Items(true, false, 0, 1, 2, 3, 4, false, true, 6),
             new Hunger(true, 14));
 
     private static final Map<String, BoxerSettings> BY_NAME = new LinkedHashMap<>();

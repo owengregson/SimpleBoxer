@@ -146,6 +146,11 @@ defaults:
     pot-slot: 2
     food-slot: 3
     block-slot: 4
+    # Seed the hotbar with a FINITE supply of instant-health splash potions the
+    # boxer throws to heal (needs self-heal enabled). The supply depletes as it
+    # throws and can genuinely run out. splash-pot-count is how many (0-9).
+    fill-splash-pots: false
+    splash-pot-count: 0
 
 # Named presets selectable at spawn (/boxer spawn <name> <preset>) and via
 # /boxer set <name> preset <preset>. Each is a sparse overlay over

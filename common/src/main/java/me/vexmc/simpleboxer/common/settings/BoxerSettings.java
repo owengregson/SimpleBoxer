@@ -207,9 +207,10 @@ public record BoxerSettings(
      */
     public record Items(boolean autoPickup, boolean lockLoadout,
             int weaponSlot, int rodSlot, int potSlot, int foodSlot, int blockSlot,
-            boolean unbreakableKit) {
+            boolean unbreakableKit, boolean fillSplashPots, int splashPotCount) {
 
-        public static final Items DEFAULT = new Items(false, false, 0, 1, 2, 3, 4, false);
+        public static final Items DEFAULT =
+                new Items(false, false, 0, 1, 2, 3, 4, false, false, 0);
 
         public Items {
             requireHotbar("weaponSlot", weaponSlot);
@@ -217,6 +218,10 @@ public record BoxerSettings(
             requireHotbar("potSlot", potSlot);
             requireHotbar("foodSlot", foodSlot);
             requireHotbar("blockSlot", blockSlot);
+            if (splashPotCount < 0 || splashPotCount > 9) {
+                throw new IllegalArgumentException(
+                        "splashPotCount must be a hotbar-sized count in [0,9]: " + splashPotCount);
+            }
         }
 
         private static void requireHotbar(String name, int slot) {

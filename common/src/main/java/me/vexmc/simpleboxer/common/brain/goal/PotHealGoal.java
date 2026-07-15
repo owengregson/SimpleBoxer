@@ -45,8 +45,10 @@ public final class PotHealGoal implements Goal {
 
     /** Distance (blocks) the boxer opens up before it starts drinking. */
     private static final double RETREAT_DISTANCE = 4.5;
-    /** Ticks to stand in the splash cloud before re-evaluating. */
+    /** Ticks to weave in the splash cloud before re-evaluating. */
     private static final int WAIT_TICKS = 10;
+    /** How many ticks the heal-juke holds one side before flipping (keeps net drift small). */
+    private static final int JUKE_FLIP_TICKS = 3;
     /**
      * Hard ceiling on time spent in the phase-0 retreat before drinking anyway. A
      * same-speed chaser keeps the gap constant, so the {@link #RETREAT_DISTANCE}
@@ -158,6 +160,23 @@ public final class PotHealGoal implements Goal {
         }
     }
 
+    /**
+     * A gentle side-to-side weave (tangent to the flee direction) for the throw/wait
+     * phases: it keeps the boxer moving — fluid and hard to punish — while the short
+     * flip cadence keeps its net drift inside the splash-heal cloud. Deterministic
+     * (a plain scratch counter, no rng).
+     */
+    private static @NotNull Vec3d healJuke(@NotNull Vec3d awayDir, @NotNull BrainMemory mem) {
+        Vec3d flat = awayDir.horizontalNormalized();
+        if (flat.lengthSqr() < 1.0E-8) {
+            flat = new Vec3d(1.0, 0.0, 0.0);
+        }
+        int[] w = mem.ints("potJuke", 1);
+        boolean left = ((w[0]++ / JUKE_FLIP_TICKS) & 1) == 0;
+        return left ? new Vec3d(-flat.z(), 0.0, flat.x())
+                : new Vec3d(flat.z(), 0.0, -flat.x());
+    }
+
     @Override
     public boolean exclusive(@NotNull Perception p) {
         // Hard-seize whenever we would score: a healing boxer must not be
@@ -205,20 +224,26 @@ public final class PotHealGoal implements Goal {
                 return new Intent(awayDir, Intent.FacingIntent.faceMove(),
                         Intent.ActionIntent.none(), true, Intent.JumpHint.NONE);
 
-            case 1: // swap to the pot slot, keep backing off
+            case 1: // swap to the pot slot, keep backing off, and START aiming down a
+                    // tick EARLY: the aim spring needs a tick to pitch to our feet, so
+                    // facing them here means the pot actually lands at our feet next
+                    // tick instead of sailing out shallow.
                 st[PHASE] = 2;
-                return new Intent(awayDir, Intent.FacingIntent.faceMove(),
+                return new Intent(awayDir, feet,
                         Intent.ActionIntent.selectSlot(s.items().potSlot()),
                         true, Intent.JumpHint.NONE);
 
-            case 2: // throw the splash pot straight down at our own feet, standing still
+            case 2: // throw the splash pot at our feet while JUKING sideways — fluid and
+                    // evasive, not a sitting duck; a lateral weave keeps us inside the
+                    // heal cloud (splash range is generous) instead of standing still.
                 st[POTS_THROWN] = st[POTS_THROWN] + 1;
                 st[WAIT_TIMER] = WAIT_TICKS;
                 st[PHASE] = 3;
-                return new Intent(Vec3d.ZERO, feet,
+                return new Intent(healJuke(awayDir, mem), feet,
                         Intent.ActionIntent.startUse(true), false, Intent.JumpHint.NONE);
 
-            case 3: // stand in the cloud; when it settles, recover-or-repeat
+            case 3: // weave in the settling cloud (never standing still); when it
+                    // settles, recover, repeat, or give up.
                 st[WAIT_TIMER] = st[WAIT_TIMER] - 1;
                 if (st[WAIT_TIMER] <= 0) {
                     double hp20 = self.healthPct() * 20.0;
@@ -226,7 +251,7 @@ public final class PotHealGoal implements Goal {
                     boolean capped = st[POTS_THROWN] >= s.selfHeal().splashCap();
                     st[PHASE] = (recovered || capped) ? 4 : 1;
                 }
-                return new Intent(Vec3d.ZERO, feet,
+                return new Intent(healJuke(awayDir, mem), feet,
                         Intent.ActionIntent.none(), false, Intent.JumpHint.NONE);
 
             default: { // 4: swap the weapon back, then either finish or give up

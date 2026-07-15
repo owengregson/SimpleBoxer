@@ -151,8 +151,10 @@ public final class BoxerSettingsParser {
         int food = intIn(section, "food-slot", base.foodSlot(), 0, 8, warnings);
         int block = intIn(section, "block-slot", base.blockSlot(), 0, 8, warnings);
         boolean unbreakableKit = section.getBoolean("unbreakable-kit", base.unbreakableKit());
+        boolean fillSplashPots = section.getBoolean("fill-splash-pots", base.fillSplashPots());
+        int splashPotCount = intIn(section, "splash-pot-count", base.splashPotCount(), 0, 9, warnings);
         return new BoxerSettings.Items(autoPickup, lockLoadout, weapon, rod, pot, food, block,
-                unbreakableKit);
+                unbreakableKit, fillSplashPots, splashPotCount);
     }
 
     private static @NotNull BoxerSettings.Hunger parseHunger(

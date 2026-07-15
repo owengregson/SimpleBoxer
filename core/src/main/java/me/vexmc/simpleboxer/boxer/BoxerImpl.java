@@ -24,6 +24,7 @@ import me.vexmc.simpleboxer.nms.NmsBridge;
 import me.vexmc.simpleboxer.nms.PacketIO;
 import org.bukkit.GameMode;
 import org.bukkit.Location;
+import org.bukkit.Material;
 import org.bukkit.attribute.Attribute;
 import org.bukkit.attribute.AttributeInstance;
 import org.bukkit.entity.Player;
@@ -284,8 +285,13 @@ final class BoxerImpl implements Boxer {
             loadoutDirty = false;
             if (!syncKit()) {
                 loadoutDirty = true;
+            } else {
+                seedConsumables();
             }
         }
+        // Keep the pot slot loaded from the finite splash-pot reserve so the heal
+        // routine can throw again next cycle — until the whole supply runs out.
+        restockPotSlot();
         if (serverTicksEntity && hasAnchor) {
             reanchorServerPosition();
         }
@@ -619,6 +625,113 @@ final class BoxerImpl implements Boxer {
 
     private static @Nullable ItemStack slot(PlayerInventory inventory, int hotbarSlot) {
         return hotbarSlot >= 0 && hotbarSlot <= 8 ? inventory.getItem(hotbarSlot) : null;
+    }
+
+    /**
+     * Fill the boxer's finite splash-potion reserve when the config toggle asks for
+     * it. Instant-health SPLASH_POTIONs (which do not stack) go into the pot slot and
+     * then the next free, non-tool hotbar slots, up to {@code splashPotCount}. Runs on
+     * the owning thread at the loadout-dirty seam (spawn/respawn/equip), so a respawn
+     * refills a fresh supply; only empty slots are written.
+     */
+    private void seedConsumables() {
+        BoxerSettings.Items items = settings.items();
+        if (!items.fillSplashPots() || items.splashPotCount() <= 0) {
+            return;
+        }
+        PlayerInventory inventory = spawned.player().getInventory();
+        java.util.Set<Integer> reserved = java.util.Set.of(
+                items.weaponSlot(), items.rodSlot(), items.foodSlot(), items.blockSlot());
+        int placed = 0;
+        for (int hotbar = items.potSlot(); hotbar <= 8 && placed < items.splashPotCount(); hotbar++) {
+            if (hotbar != items.potSlot() && reserved.contains(hotbar)) {
+                continue; // keep the configured tool slots free
+            }
+            ItemStack existing = inventory.getItem(hotbar);
+            if (existing == null || existing.getType().isAir()) {
+                inventory.setItem(hotbar, splashHealPotion());
+                placed++;
+            }
+        }
+    }
+
+    /**
+     * When the pot slot has emptied (a pot was thrown) but reserves remain elsewhere in
+     * the hotbar, slide the next splash potion into the pot slot so the routine can throw
+     * again — a real player scrolling to their next pot. When no reserve is left the pot
+     * slot stays empty and {@code inventoryView().hasPots()} goes false, so the heal
+     * routine gives up: the supply has genuinely run out.
+     */
+    private void restockPotSlot() {
+        BoxerSettings.Items items = settings.items();
+        if (!items.fillSplashPots()) {
+            return;
+        }
+        PlayerInventory inventory = spawned.player().getInventory();
+        ItemStack held = slot(inventory, items.potSlot());
+        if (held != null && !held.getType().isAir()) {
+            return; // the pot slot is already loaded
+        }
+        for (int hotbar = 0; hotbar <= 8; hotbar++) {
+            if (hotbar == items.potSlot()) {
+                continue;
+            }
+            ItemStack candidate = inventory.getItem(hotbar);
+            if (ItemCategory.is(candidate, ItemCategory.POTION)) {
+                inventory.setItem(items.potSlot(), candidate);
+                inventory.setItem(hotbar, null);
+                return;
+            }
+        }
+    }
+
+    /**
+     * A splash instant-health potion, built to survive the 1.17.1 → 26.x matrix: the
+     * potion-type constant ({@code INSTANT_HEAL} → {@code HEALING} in 1.20.5) and the
+     * meta setter ({@code setBasePotionData} → {@code setBasePotionType}) both changed,
+     * so both are resolved reflectively with fallbacks. A failure degrades to a plain
+     * splash potion — still a thrown, depletable POTION, just without the stamped effect.
+     */
+    private @NotNull ItemStack splashHealPotion() {
+        ItemStack potion = new ItemStack(Material.SPLASH_POTION);
+        try {
+            org.bukkit.inventory.meta.ItemMeta meta = potion.getItemMeta();
+            if (meta instanceof org.bukkit.inventory.meta.PotionMeta potionMeta) {
+                stampInstantHeal(potionMeta);
+                potion.setItemMeta(potionMeta);
+            }
+        } catch (Throwable versionDrift) {
+            if (DEBUG) {
+                logger.info("[debug " + name + "] splash-heal stamp fell back to plain: " + versionDrift);
+            }
+        }
+        return potion;
+    }
+
+    private static void stampInstantHeal(@NotNull org.bukkit.inventory.meta.PotionMeta meta)
+            throws Exception {
+        Class<?> potionType = org.bukkit.potion.PotionType.class;
+        Object heal = null;
+        for (String candidate : new String[] {"HEALING", "INSTANT_HEAL"}) {
+            try {
+                heal = potionType.getField(candidate).get(null); // enum constant / static field
+                break;
+            } catch (NoSuchFieldException notThisVersion) {
+                // try the other name
+            }
+        }
+        if (heal == null) {
+            return; // neither constant exists on this version — leave it plain
+        }
+        try {
+            meta.getClass().getMethod("setBasePotionType", potionType).invoke(meta, heal);
+            return;
+        } catch (NoSuchMethodException legacy) {
+            // pre-1.20.5: fall back to the PotionData API
+        }
+        Class<?> potionData = Class.forName("org.bukkit.potion.PotionData");
+        Object data = potionData.getConstructor(potionType).newInstance(heal);
+        meta.getClass().getMethod("setBasePotionData", potionData).invoke(meta, data);
     }
 
     /** Lowers one brain {@link ActionIntent} onto the action latency line. */

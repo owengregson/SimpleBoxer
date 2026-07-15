@@ -135,10 +135,11 @@ class PotHealGoalTest {
         assertEquals(POT_SLOT, ((Intent.ActionIntent.SelectSlot) swap.action()).slot());
         assertEquals(2, mem.ints("potHeal", 3)[0]);
 
-        // Phase 2: throw the splash pot at our own feet, standing still.
+        // Phase 2: throw the splash pot at our own feet while juking sideways (fluid,
+        // not a sitting duck) — a lateral weave that keeps us in the heal cloud.
         Intent throw1 = goal.decide(perc(0.1, true, 5.0), mem);
         assertInstanceOf(Intent.ActionIntent.StartUse.class, throw1.action());
-        assertEquals(Vec3d.ZERO, throw1.moveDirWorld(), "stand still so the splash lands on us");
+        assertTrue(throw1.moveDirWorld().lengthSqr() > 0.5, "throws while juking, not standing still");
         assertInstanceOf(Intent.FacingIntent.AimAt.class, throw1.facing());
         Intent.FacingIntent.AimAt aim = (Intent.FacingIntent.AimAt) throw1.facing();
         assertEquals(0.0, aim.x());
@@ -151,7 +152,7 @@ class PotHealGoalTest {
         // loops back to phase 1 to throw another pot.
         for (int i = 0; i < 9; i++) {
             Intent wait = goal.decide(perc(0.1, true, 5.0), mem);
-            assertEquals(Vec3d.ZERO, wait.moveDirWorld());
+            assertTrue(wait.moveDirWorld().lengthSqr() > 0.5, "weaves in the cloud, not standing still");
             assertInstanceOf(Intent.FacingIntent.AimAt.class, wait.facing());
             assertEquals(3, mem.ints("potHeal", 3)[0], "still waiting");
         }

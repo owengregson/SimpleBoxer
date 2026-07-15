@@ -219,6 +219,17 @@ final class SettingsRegistry {
                 Material.SPLASH_POTION, "", s -> s.items().potSlot(), 1, 1, 0, 8,
                 (s, v) -> s.withItems(items(s).potSlot((int) Math.round(v))),
                 "§8Hotbar slot holding heal potions (0-8)."));
+        d.add(SettingDescriptor.toggle("fill-splash-pots", SettingCategory.ITEMS, "Fill splash pots",
+                Material.SPLASH_POTION, s -> s.items().fillSplashPots(),
+                s -> s.withItems(items(s).fillSplashPots(!s.items().fillSplashPots())),
+                "§8Seed the hotbar with a finite supply of",
+                "§8instant-health splash potions the boxer",
+                "§8throws to heal — and can run out of."));
+        d.add(SettingDescriptor.integer("splash-pot-count", SettingCategory.ITEMS, "Splash pot count",
+                Material.BREWING_STAND, "", s -> s.items().splashPotCount(), 1, 3, 0, 9,
+                (s, v) -> s.withItems(items(s).splashPotCount((int) Math.round(v))),
+                "§8How many splash potions to seed (0-9),",
+                "§8when Fill splash pots is on."));
         d.add(SettingDescriptor.integer("food-slot", SettingCategory.ITEMS, "Food slot",
                 Material.COOKED_BEEF, "", s -> s.items().foodSlot(), 1, 1, 0, 8,
                 (s, v) -> s.withItems(items(s).foodSlot((int) Math.round(v))),
@@ -362,36 +373,50 @@ final class SettingsRegistry {
 
     private record ItemsEdit(@NotNull Items i) {
         @NotNull Items autoPickup(boolean v) {
-            return new Items(v, i.lockLoadout(), i.weaponSlot(), i.rodSlot(),
-                    i.potSlot(), i.foodSlot(), i.blockSlot(), i.unbreakableKit());
+            return with(v, i.lockLoadout(), i.weaponSlot(), i.rodSlot(), i.potSlot(),
+                    i.foodSlot(), i.blockSlot(), i.unbreakableKit(), i.fillSplashPots(), i.splashPotCount());
         }
         @NotNull Items lockLoadout(boolean v) {
-            return new Items(i.autoPickup(), v, i.weaponSlot(), i.rodSlot(),
-                    i.potSlot(), i.foodSlot(), i.blockSlot(), i.unbreakableKit());
+            return with(i.autoPickup(), v, i.weaponSlot(), i.rodSlot(), i.potSlot(),
+                    i.foodSlot(), i.blockSlot(), i.unbreakableKit(), i.fillSplashPots(), i.splashPotCount());
         }
         @NotNull Items weaponSlot(int v) {
-            return new Items(i.autoPickup(), i.lockLoadout(), v, i.rodSlot(),
-                    i.potSlot(), i.foodSlot(), i.blockSlot(), i.unbreakableKit());
+            return with(i.autoPickup(), i.lockLoadout(), v, i.rodSlot(), i.potSlot(),
+                    i.foodSlot(), i.blockSlot(), i.unbreakableKit(), i.fillSplashPots(), i.splashPotCount());
         }
         @NotNull Items rodSlot(int v) {
-            return new Items(i.autoPickup(), i.lockLoadout(), i.weaponSlot(), v,
-                    i.potSlot(), i.foodSlot(), i.blockSlot(), i.unbreakableKit());
+            return with(i.autoPickup(), i.lockLoadout(), i.weaponSlot(), v, i.potSlot(),
+                    i.foodSlot(), i.blockSlot(), i.unbreakableKit(), i.fillSplashPots(), i.splashPotCount());
         }
         @NotNull Items potSlot(int v) {
-            return new Items(i.autoPickup(), i.lockLoadout(), i.weaponSlot(), i.rodSlot(),
-                    v, i.foodSlot(), i.blockSlot(), i.unbreakableKit());
+            return with(i.autoPickup(), i.lockLoadout(), i.weaponSlot(), i.rodSlot(), v,
+                    i.foodSlot(), i.blockSlot(), i.unbreakableKit(), i.fillSplashPots(), i.splashPotCount());
         }
         @NotNull Items foodSlot(int v) {
-            return new Items(i.autoPickup(), i.lockLoadout(), i.weaponSlot(), i.rodSlot(),
-                    i.potSlot(), v, i.blockSlot(), i.unbreakableKit());
+            return with(i.autoPickup(), i.lockLoadout(), i.weaponSlot(), i.rodSlot(), i.potSlot(),
+                    v, i.blockSlot(), i.unbreakableKit(), i.fillSplashPots(), i.splashPotCount());
         }
         @NotNull Items blockSlot(int v) {
-            return new Items(i.autoPickup(), i.lockLoadout(), i.weaponSlot(), i.rodSlot(),
-                    i.potSlot(), i.foodSlot(), v, i.unbreakableKit());
+            return with(i.autoPickup(), i.lockLoadout(), i.weaponSlot(), i.rodSlot(), i.potSlot(),
+                    i.foodSlot(), v, i.unbreakableKit(), i.fillSplashPots(), i.splashPotCount());
         }
         @NotNull Items unbreakableKit(boolean v) {
-            return new Items(i.autoPickup(), i.lockLoadout(), i.weaponSlot(), i.rodSlot(),
-                    i.potSlot(), i.foodSlot(), i.blockSlot(), v);
+            return with(i.autoPickup(), i.lockLoadout(), i.weaponSlot(), i.rodSlot(), i.potSlot(),
+                    i.foodSlot(), i.blockSlot(), v, i.fillSplashPots(), i.splashPotCount());
+        }
+        @NotNull Items fillSplashPots(boolean v) {
+            return with(i.autoPickup(), i.lockLoadout(), i.weaponSlot(), i.rodSlot(), i.potSlot(),
+                    i.foodSlot(), i.blockSlot(), i.unbreakableKit(), v, i.splashPotCount());
+        }
+        @NotNull Items splashPotCount(int v) {
+            return with(i.autoPickup(), i.lockLoadout(), i.weaponSlot(), i.rodSlot(), i.potSlot(),
+                    i.foodSlot(), i.blockSlot(), i.unbreakableKit(), i.fillSplashPots(), v);
+        }
+        private static @NotNull Items with(boolean autoPickup, boolean lockLoadout, int weaponSlot,
+                int rodSlot, int potSlot, int foodSlot, int blockSlot, boolean unbreakableKit,
+                boolean fillSplashPots, int splashPotCount) {
+            return new Items(autoPickup, lockLoadout, weaponSlot, rodSlot, potSlot, foodSlot,
+                    blockSlot, unbreakableKit, fillSplashPots, splashPotCount);
         }
     }
 }
