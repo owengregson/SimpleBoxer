@@ -1,5 +1,29 @@
 # Changelog
 
+## 0.6.2 — wall-glue fix, properly
+
+Supersedes the 0.6.1 escape hack, which almost never fired (its "not descending"
+detector was reset every few ticks by the boxer momentarily touching the floor,
+and the real failure descends a full ~0.42/cycle — past its own threshold).
+
+- **Fixed boxers gluing to walls — at the root.** Re-diagnosed with the live
+  trace: the boxer's own collision finds the real floor correctly; the stuck one
+  is the *server body*. A boxer that jumps into a wall is held at its jump apex
+  (`floor + 0.42`, the jump strength — not a real ledge) because the server's
+  anti-cheat rejects the wall-pressed descent and snaps the body back up every
+  tick, and the emulator kept re-adopting that correction — an infinite
+  oscillation. The boxer now recognises the correction *loop*, stops re-adopting
+  the up-snaps, and drives the server body down onto the floor the sim already
+  found, holding it there until the server accepts the position (the correction
+  stream goes quiet) — so it slides down and settles instead of hanging.
+- **Physics collision now respects region/chunk readability.** The collision
+  reader gated block lookups the way navigation already does: an unreadable
+  cross-region or unloaded cell near a seam is treated as solid rather than
+  silently skipped, so the emulator can't fall through a floor the server holds
+  on Folia.
+- The `-Dsimpleboxer.debug` wall trace now reports server ground state and the
+  recovery/streak counters.
+
 ## 0.6.1 — wall-glue fix
 
 - **Fixed boxers gluing to walls.** The reported "sticks to a wall and won't fall"

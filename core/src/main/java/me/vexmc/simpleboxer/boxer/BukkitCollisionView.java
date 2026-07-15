@@ -46,6 +46,20 @@ final class BukkitCollisionView implements CollisionView {
         for (int x = minX; x <= maxX; x++) {
             for (int y = minY; y <= maxY; y++) {
                 for (int z = minZ; z <= maxZ; z++) {
+                    // A cell we cannot read on this region's thread (cross-region /
+                    // unloaded chunk near a seam, or outside the buildable column) is
+                    // treated as a SOLID cube — the same conservative "unreadable = wall"
+                    // convention the nav layer uses. Skipping it instead (as this did)
+                    // would silently drop a floor/wall the server actually enforces, so
+                    // the sim would fall through a surface the server holds and get
+                    // "moved-wrongly"-corrected back up into wall glue.
+                    if (!isReadable(x, y, z)) {
+                        Box cube = new Box(x, y, z, x + 1, y + 1, z + 1);
+                        if (cube.intersects(region)) {
+                            boxes.add(cube);
+                        }
+                        continue;
+                    }
                     Block block = world.getBlockAt(x, y, z);
                     if (block.getType().isAir()) {
                         continue;
