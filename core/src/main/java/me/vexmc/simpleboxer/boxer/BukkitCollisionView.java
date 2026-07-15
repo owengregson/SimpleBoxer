@@ -65,6 +65,22 @@ final class BukkitCollisionView implements CollisionView {
     }
 
     @Override
+    public boolean isReadable(int blockX, int blockY, int blockZ) {
+        // Folia/region safety: only a cell whose chunk is loaded ON THIS region's
+        // thread may be read. World#isChunkLoaded is a cheap state query that never
+        // pulls a chunk in from another region — a chunk owned by another region (or
+        // simply not loaded) is not loaded from here, so it reads as false. That is the
+        // conservative direction the planner wants: unreadable = no edge = a wall, so
+        // the search stops at the loaded/region frontier instead of probing a block a
+        // cross-region getBlockAt would have to service. A cell outside the buildable
+        // Y column is likewise unreadable so a fall/head probe can't run off the world.
+        if (blockY < world.getMinHeight() || blockY >= world.getMaxHeight()) {
+            return false;
+        }
+        return world.isChunkLoaded(blockX >> 4, blockZ >> 4);
+    }
+
+    @Override
     public double slipperiness(int blockX, int blockY, int blockZ) {
         Material material = world.getBlockAt(blockX, blockY, blockZ).getType();
         return switch (material.name()) {

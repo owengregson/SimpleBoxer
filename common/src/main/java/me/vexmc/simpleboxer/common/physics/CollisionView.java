@@ -31,4 +31,20 @@ public interface CollisionView {
     default @Nullable Vec3d stuckMultiplier(int blockX, int blockY, int blockZ) {
         return null;
     }
+
+    /**
+     * Whether the block cell at {@code (blockX, blockY, blockZ)} can be read on the
+     * <em>current</em> thread without crossing a region/loaded-chunk boundary — the
+     * Folia seam the server-side pathfinder gates every neighbour cell through
+     * (footprint + head + fall column). An unreadable cell is treated as a wall (no
+     * edge), so the search halts cleanly at the loaded/region frontier and never pulls
+     * a chunk in from another region.
+     *
+     * <p>Synthetic/test views have their whole geometry in memory, so the default is
+     * {@code true} (everything is readable); only the live Bukkit view overrides this
+     * to return {@code false} outside the readable set.</p>
+     */
+    default boolean isReadable(int blockX, int blockY, int blockZ) {
+        return true;
+    }
 }
