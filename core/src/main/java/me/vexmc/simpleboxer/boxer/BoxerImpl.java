@@ -155,6 +155,23 @@ final class BoxerImpl implements Boxer {
     private int idleMoveTicks;
 
     /**
+     * Wall-glue escape. Some servers repeatedly "moved-wrongly"-correct a boxer that is
+     * airborne and pressed into a wall — a collision-shape disagreement between our
+     * emulator and the server (common at chunk borders) makes the server snap the boxer
+     * back UP to the same spot every tick, so its fall never reaches the server and it
+     * hangs on the wall like glue. We detect the non-descending airborne wall-contact
+     * and briefly drive the boxer straight AWAY from the wall, reaching a position the
+     * server accepts so gravity can take over again.
+     */
+    private int wallHangTicks;
+    private double wallHangStartY;
+    private int wallEscapeTicks;
+    private static final int GLUE_DETECT_TICKS = 8;
+    private static final double GLUE_MIN_DESCENT = 0.4;
+    private static final int GLUE_ESCAPE_TICKS = 12;
+    private static final double GLUE_ESCAPE_BACK = 0.85;
+
+    /**
      * Where our packets last left the boxer's server position. On a server that
      * entity-ticks the boxer for us, the region's own doTick travels the body by
      * gravity/knockback between our ticks; we re-anchor to this each tick so the
@@ -347,9 +364,33 @@ final class BoxerImpl implements Boxer {
             }
             syncSprint(out.sprintDesire());
         }
+        // Wall-glue escape: while escaping, IGNORE the brain's push into the wall and
+        // drive straight back off it, so the boxer reaches a position the server will
+        // accept and stops being corrected back up onto the wall face.
+        if (wallEscapeTicks > 0) {
+            wallEscapeTicks--;
+            input = new MoveInput(-GLUE_ESCAPE_BACK, 0.0, false, false, false);
+        }
         queueInput(input, now);
         physics.step(input, aimYaw, collisionView);
         pushAwayFromNeighbors();
+
+        // Detect the wall glue: airborne AND wall-collided AND not descending for many
+        // ticks means the server is snapping the boxer's fall back up (the correction
+        // loop). Break away from the wall rather than hang there.
+        if (physics.horizontalCollision() && !physics.onGround()) {
+            if (wallHangTicks == 0) {
+                wallHangStartY = physics.y();
+            }
+            wallHangTicks++;
+            if (wallHangTicks >= GLUE_DETECT_TICKS
+                    && wallHangStartY - physics.y() < GLUE_MIN_DESCENT) {
+                wallEscapeTicks = GLUE_ESCAPE_TICKS;
+                wallHangTicks = 0;
+            }
+        } else {
+            wallHangTicks = 0;
+        }
 
         // Matrix forensics: trace the sim vs server-entity Y whenever the boxer is
         // wall-collided — the diff exposes any sim<->server divergence on contact
@@ -357,9 +398,10 @@ final class BoxerImpl implements Boxer {
         if (DEBUG && physics.horizontalCollision()) {
             Location serverLoc = spawned.player().getLocation();
             logger.info(String.format(
-                    "[debug %s] wallCollide sim=(%.3f,%.3f,%.3f) vy=%.4f onGround=%b | server=(%.3f,%.3f,%.3f)",
+                    "[debug %s] wallCollide sim=(%.3f,%.3f,%.3f) vy=%.4f onGround=%b | server=(%.3f,%.3f,%.3f) escape=%d",
                     name, physics.x(), physics.y(), physics.z(), physics.velocity().y(),
-                    physics.onGround(), serverLoc.getX(), serverLoc.getY(), serverLoc.getZ()));
+                    physics.onGround(), serverLoc.getX(), serverLoc.getY(), serverLoc.getZ(),
+                    wallEscapeTicks));
         }
 
         // 3. Report movement the way a real client does.
