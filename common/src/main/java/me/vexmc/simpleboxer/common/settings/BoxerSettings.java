@@ -197,11 +197,19 @@ public record BoxerSettings(
      * entities into its real inventory; {@code lockLoadout} restores the classic
      * per-tick kit re-stamp (a pure fixture whose gear never changes). The slot
      * indices tell the brain which hotbar slot holds each tool.
+     *
+     * <p>{@code unbreakableKit} stamps every kit piece Unbreakable so the boxer's
+     * gear never wears out. It DEFAULTS to {@code false} — a normal boxer's armor
+     * chips on hit and its weapon dulls on attack, exactly like a real player. A
+     * {@code lockLoadout} fixture is implicitly unbreakable regardless (its gear is
+     * re-stamped every tick anyway), and calibration fixtures set it explicitly so
+     * a boxer that spars forever never has its sword or armor break.</p>
      */
     public record Items(boolean autoPickup, boolean lockLoadout,
-            int weaponSlot, int rodSlot, int potSlot, int foodSlot, int blockSlot) {
+            int weaponSlot, int rodSlot, int potSlot, int foodSlot, int blockSlot,
+            boolean unbreakableKit) {
 
-        public static final Items DEFAULT = new Items(false, false, 0, 1, 2, 3, 4);
+        public static final Items DEFAULT = new Items(false, false, 0, 1, 2, 3, 4, false);
 
         public Items {
             requireHotbar("weaponSlot", weaponSlot);

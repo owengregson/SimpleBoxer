@@ -111,6 +111,16 @@ class BoxerSettingsParserTest {
     }
 
     @Test
+    void itemsUnbreakableKitParses() {
+        BoxerSettings parsed = BoxerSettingsParser.parse(yaml("""
+                items:
+                  unbreakable-kit: true
+                """), BoxerSettings.DEFAULTS, ignored -> {});
+        assertTrue(parsed.items().unbreakableKit(), "items.unbreakable-kit reads through");
+        assertFalse(BoxerSettings.DEFAULTS.items().unbreakableKit(), "the default kit wears");
+    }
+
+    @Test
     void sparseOverlayInheritsEverythingElse() {
         BoxerSettings parsed = BoxerSettingsParser.parse(
                 yaml("ping-ms: 150"), DifficultyPresets.HARD, ignored -> {});

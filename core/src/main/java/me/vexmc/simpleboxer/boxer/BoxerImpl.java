@@ -976,19 +976,30 @@ final class BoxerImpl implements Boxer {
      */
     private boolean syncKit() {
         Loadout kit = loadout;
+        // A locked kit is re-stamped every tick and so is implicitly unbreakable;
+        // otherwise the operator's unbreakable-kit toggle decides. When neither is
+        // set the gear wears like a real player's (vanilla armor/weapon/break paths).
+        boolean unbreakable = settings.items().unbreakableKit() || settings.items().lockLoadout();
         try {
             PlayerInventory inventory = spawned.player().getInventory();
-            inventory.setHelmet(durable(kit.helmet()));
-            inventory.setChestplate(durable(kit.chestplate()));
-            inventory.setLeggings(durable(kit.leggings()));
-            inventory.setBoots(durable(kit.boots()));
-            inventory.setItemInOffHand(durable(kit.offHand()));
+            applyPiece(inventory.getHelmet(), durable(kit.helmet(), unbreakable),
+                    inventory::setHelmet);
+            applyPiece(inventory.getChestplate(), durable(kit.chestplate(), unbreakable),
+                    inventory::setChestplate);
+            applyPiece(inventory.getLeggings(), durable(kit.leggings(), unbreakable),
+                    inventory::setLeggings);
+            applyPiece(inventory.getBoots(), durable(kit.boots(), unbreakable),
+                    inventory::setBoots);
+            applyPiece(inventory.getItemInOffHand(), durable(kit.offHand(), unbreakable),
+                    inventory::setItemInOffHand);
             // The main-hand kit item goes to the configured weapon slot; the boxer
             // selects hotbar slots itself via SetCarriedItem, so we don't force
             // the selected slot here (that would fight a mid-fight rod/pot swap).
-            ItemStack main = durable(kit.mainHand());
+            ItemStack main = durable(kit.mainHand(), unbreakable);
             if (main != null || settings.items().lockLoadout()) {
-                inventory.setItem(settings.items().weaponSlot(), main);
+                int weaponSlot = settings.items().weaponSlot();
+                applyPiece(inventory.getItem(weaponSlot), main,
+                        piece -> inventory.setItem(weaponSlot, piece));
             }
             return true;
         } catch (Throwable failure) {
@@ -997,10 +1008,52 @@ final class BoxerImpl implements Boxer {
         }
     }
 
-    /** Stamp a kit piece Unbreakable so a tireless fixture's gear never wears out. */
-    private static @Nullable ItemStack durable(@Nullable ItemStack item) {
-        if (item == null) {
-            return null;
+    /**
+     * Write a kit piece to a slot only when it actually differs from what's worn,
+     * comparing IGNORING durability damage. So an operator {@code equip()}
+     * re-publish of the same kit mid-fight leaves accumulated wear in place, while
+     * an empty slot or a genuinely changed item is (re-)stamped. A respawned boxer
+     * starts with an empty inventory, so it always gets pristine gear back —
+     * vanilla-correct.
+     */
+    private static void applyPiece(@Nullable ItemStack worn, @Nullable ItemStack target,
+            @NotNull java.util.function.Consumer<ItemStack> setter) {
+        if (!sameIgnoringDamage(worn, target)) {
+            setter.accept(target);
+        }
+    }
+
+    /** Two kit pieces equal ignoring durability damage (same type/enchants/name/…). */
+    private static boolean sameIgnoringDamage(@Nullable ItemStack a, @Nullable ItemStack b) {
+        boolean aEmpty = a == null || a.getType().isAir();
+        boolean bEmpty = b == null || b.getType().isAir();
+        if (aEmpty || bEmpty) {
+            return aEmpty && bEmpty;
+        }
+        return zeroDamage(a).isSimilar(zeroDamage(b));
+    }
+
+    /** A clone with any durability damage cleared, so {@code isSimilar} ignores wear. */
+    private static @NotNull ItemStack zeroDamage(@NotNull ItemStack item) {
+        ItemStack copy = item.clone();
+        org.bukkit.inventory.meta.ItemMeta meta = copy.getItemMeta();
+        if (meta instanceof org.bukkit.inventory.meta.Damageable damageable) {
+            damageable.setDamage(0);
+            copy.setItemMeta(meta);
+        }
+        return copy;
+    }
+
+    /**
+     * Return a kit piece, stamping it Unbreakable only when the boxer's kit is
+     * configured unbreakable (or locked). Otherwise the piece is returned untouched
+     * and wears like a real player's gear — armor on hit, weapon on attack,
+     * break to an empty slot — all via the vanilla paths already run for the real
+     * {@link org.bukkit.entity.Player}.
+     */
+    private static @Nullable ItemStack durable(@Nullable ItemStack item, boolean unbreakable) {
+        if (item == null || !unbreakable) {
+            return item;
         }
         org.bukkit.inventory.meta.ItemMeta meta = item.getItemMeta();
         if (meta != null) {

@@ -33,33 +33,41 @@ public final class DifficultyPresets {
 
     private DifficultyPresets() {}
 
+    /**
+     * The classic ladder's inventory profile: default slots, but an
+     * <b>unbreakable</b> kit so an invincible, respawn-in-place calibration
+     * fixture that spars forever never has its sword or armor wear out. (The
+     * MORTAL {@code sweat} showcase wears its gear like a real player.)
+     */
+    private static final Items FIXTURE_ITEMS = new Items(false, false, 0, 1, 2, 3, 4, true);
+
     /** Stands still, never attacks — the punching bag. */
     public static final BoxerSettings DUMMY = new BoxerSettings(
             0, 0.0, 0.0, AimParams.SMOOTH, 3.0, 180.0,
             WTap.OFF, new Movement(Movement.Style.STAND, 0.0, false), true, true,
             InvincibleMode.ZERO_DAMAGE, Death.RESPAWN_KEEP, Combat.OFF, SelfHeal.OFF,
-            Items.DEFAULT, Hunger.DEFAULT);
+            FIXTURE_ITEMS, Hunger.DEFAULT);
 
     /** High ping, slow sloppy clicks, drifting aim, walks rather than sprints. */
     public static final BoxerSettings EASY = new BoxerSettings(
             120, 4.0, 0.5, AimParams.SLOPPY, 2.8, 18.0,
             WTap.OFF, new Movement(Movement.Style.RUSH, 0.0, false), true, true,
             InvincibleMode.ZERO_DAMAGE, Death.RESPAWN_KEEP, Combat.OFF, SelfHeal.OFF,
-            Items.DEFAULT, Hunger.DEFAULT);
+            FIXTURE_ITEMS, Hunger.DEFAULT);
 
     /** An ordinary player: average ping, mid CPS, smooth-pursuit aim. */
     public static final BoxerSettings MEDIUM = new BoxerSettings(
             60, 7.0, 0.35, AimParams.SMOOTH, 2.9, 12.0,
             WTap.OFF, Movement.RUSH, true, true,
             InvincibleMode.ZERO_DAMAGE, Death.RESPAWN_KEEP, Combat.OFF, SelfHeal.OFF,
-            Items.DEFAULT, Hunger.DEFAULT);
+            FIXTURE_ITEMS, Hunger.DEFAULT);
 
     /** A practiced PvPer: low ping, 10 CPS, sharp aim, disciplined w-taps. */
     public static final BoxerSettings HARD = new BoxerSettings(
             35, 10.0, 0.25, AimParams.SHARP, 3.0, 8.0,
             new WTap(true, 1, 2), Movement.RUSH, true, true,
             InvincibleMode.ZERO_DAMAGE, Death.RESPAWN_KEEP, Combat.OFF, SelfHeal.OFF,
-            Items.DEFAULT, Hunger.DEFAULT);
+            FIXTURE_ITEMS, Hunger.DEFAULT);
 
     /** Tournament-grade: tight aim spring, fast taps, circles its target. */
     public static final BoxerSettings EXPERT = new BoxerSettings(
@@ -67,14 +75,14 @@ public final class DifficultyPresets {
             new WTap(true, 0, 2), new Movement(Movement.Style.STRAFE_CIRCLE, 0.0, true), true, true,
             InvincibleMode.ZERO_DAMAGE, Death.RESPAWN_KEEP,
             new Combat(false, false, 3.0, 6.0, true, false, 0.0), SelfHeal.OFF,
-            Items.DEFAULT, Hunger.DEFAULT);
+            FIXTURE_ITEMS, Hunger.DEFAULT);
 
     /** The machine: zero ping, locked aim, saturated clicks — a calibrator. */
     public static final BoxerSettings AIMBOT = new BoxerSettings(
             0, 16.0, 0.05, AimParams.LOCKED, 3.0, 1.0,
             new WTap(true, 0, 2), Movement.RUSH, true, true,
             InvincibleMode.ZERO_DAMAGE, Death.RESPAWN_KEEP, Combat.OFF, SelfHeal.OFF,
-            Items.DEFAULT, Hunger.DEFAULT);
+            FIXTURE_ITEMS, Hunger.DEFAULT);
 
     /**
      * The showcase: a MORTAL sweaty PvPer that uses the full technique set —
@@ -89,7 +97,7 @@ public final class DifficultyPresets {
             InvincibleMode.ZERO_DAMAGE, Death.DEFAULT,
             new Combat(true, true, 3.0, 5.5, true, false, 0.03),
             new SelfHeal(true, 8.0, 18.0, 6),
-            new Items(true, false, 0, 1, 2, 3, 4),
+            new Items(true, false, 0, 1, 2, 3, 4, false),
             new Hunger(true, 14));
 
     private static final Map<String, BoxerSettings> BY_NAME = new LinkedHashMap<>();

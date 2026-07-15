@@ -83,6 +83,7 @@ public final class BoxerSettingsWriter {
         items.set("pot-slot", settings.items().potSlot());
         items.set("food-slot", settings.items().foodSlot());
         items.set("block-slot", settings.items().blockSlot());
+        items.set("unbreakable-kit", settings.items().unbreakableKit());
 
         ConfigurationSection hunger = fresh(section, "hunger");
         hunger.set("natural", settings.hunger().natural());

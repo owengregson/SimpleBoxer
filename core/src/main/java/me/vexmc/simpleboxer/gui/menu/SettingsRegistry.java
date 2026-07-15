@@ -200,6 +200,13 @@ final class SettingsRegistry {
                 s -> s.withItems(items(s).lockLoadout(!s.items().lockLoadout())),
                 "§8Re-stamp the kit every tick — a pure fixture",
                 "§8whose gear never changes."));
+        d.add(SettingDescriptor.toggle("unbreakable-kit", SettingCategory.ITEMS, "Unbreakable kit",
+                Material.DIAMOND_CHESTPLATE, s -> s.items().unbreakableKit(),
+                s -> s.withItems(items(s).unbreakableKit(!s.items().unbreakableKit())),
+                "§8Stamp every kit piece Unbreakable. Off — the",
+                "§8default — wears armor on hit and weapons on",
+                "§8attack like a real player (locked kits stay",
+                "§8unbreakable regardless)."));
         d.add(SettingDescriptor.integer("weapon-slot", SettingCategory.ITEMS, "Weapon slot",
                 Material.DIAMOND_SWORD, "", s -> s.items().weaponSlot(), 1, 1, 0, 8,
                 (s, v) -> s.withItems(items(s).weaponSlot((int) Math.round(v))),
@@ -356,31 +363,35 @@ final class SettingsRegistry {
     private record ItemsEdit(@NotNull Items i) {
         @NotNull Items autoPickup(boolean v) {
             return new Items(v, i.lockLoadout(), i.weaponSlot(), i.rodSlot(),
-                    i.potSlot(), i.foodSlot(), i.blockSlot());
+                    i.potSlot(), i.foodSlot(), i.blockSlot(), i.unbreakableKit());
         }
         @NotNull Items lockLoadout(boolean v) {
             return new Items(i.autoPickup(), v, i.weaponSlot(), i.rodSlot(),
-                    i.potSlot(), i.foodSlot(), i.blockSlot());
+                    i.potSlot(), i.foodSlot(), i.blockSlot(), i.unbreakableKit());
         }
         @NotNull Items weaponSlot(int v) {
             return new Items(i.autoPickup(), i.lockLoadout(), v, i.rodSlot(),
-                    i.potSlot(), i.foodSlot(), i.blockSlot());
+                    i.potSlot(), i.foodSlot(), i.blockSlot(), i.unbreakableKit());
         }
         @NotNull Items rodSlot(int v) {
             return new Items(i.autoPickup(), i.lockLoadout(), i.weaponSlot(), v,
-                    i.potSlot(), i.foodSlot(), i.blockSlot());
+                    i.potSlot(), i.foodSlot(), i.blockSlot(), i.unbreakableKit());
         }
         @NotNull Items potSlot(int v) {
             return new Items(i.autoPickup(), i.lockLoadout(), i.weaponSlot(), i.rodSlot(),
-                    v, i.foodSlot(), i.blockSlot());
+                    v, i.foodSlot(), i.blockSlot(), i.unbreakableKit());
         }
         @NotNull Items foodSlot(int v) {
             return new Items(i.autoPickup(), i.lockLoadout(), i.weaponSlot(), i.rodSlot(),
-                    i.potSlot(), v, i.blockSlot());
+                    i.potSlot(), v, i.blockSlot(), i.unbreakableKit());
         }
         @NotNull Items blockSlot(int v) {
             return new Items(i.autoPickup(), i.lockLoadout(), i.weaponSlot(), i.rodSlot(),
-                    i.potSlot(), i.foodSlot(), v);
+                    i.potSlot(), i.foodSlot(), v, i.unbreakableKit());
+        }
+        @NotNull Items unbreakableKit(boolean v) {
+            return new Items(i.autoPickup(), i.lockLoadout(), i.weaponSlot(), i.rodSlot(),
+                    i.potSlot(), i.foodSlot(), i.blockSlot(), v);
         }
     }
 }

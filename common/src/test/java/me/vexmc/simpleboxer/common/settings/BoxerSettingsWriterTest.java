@@ -7,6 +7,7 @@ import org.bukkit.configuration.file.YamlConfiguration;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -58,9 +59,24 @@ class BoxerSettingsWriterTest {
                 new BoxerSettings.Death(true, BoxerSettings.Death.Mode.MANUAL),
                 new BoxerSettings.Combat(true, true, 2.5, 5.5, true, true, 0.07),
                 new BoxerSettings.SelfHeal(true, 7.0, 17.0, 4),
-                new BoxerSettings.Items(true, true, 1, 2, 3, 4, 5),
+                new BoxerSettings.Items(true, true, 1, 2, 3, 4, 5, true),
                 new BoxerSettings.Hunger(true, 12));
         assertEquals(custom, roundTrip(custom));
+    }
+
+    @Test
+    void itemsUnbreakableKitDefaultsToWearAndRoundTrips() {
+        // The default kit wears (unbreakable-kit = false); toggling it on must
+        // survive a write/parse cycle so a GUI-forced unbreakable kit persists.
+        assertFalse(BoxerSettings.Items.DEFAULT.unbreakableKit(), "default kit wears");
+        assertFalse(BoxerSettings.DEFAULTS.items().unbreakableKit());
+        assertEquals(BoxerSettings.DEFAULTS, roundTrip(BoxerSettings.DEFAULTS));
+
+        BoxerSettings unbreakable = BoxerSettings.DEFAULTS.withItems(
+                new BoxerSettings.Items(false, false, 0, 1, 2, 3, 4, true));
+        assertTrue(unbreakable.items().unbreakableKit());
+        assertEquals(unbreakable, roundTrip(unbreakable),
+                "an unbreakable-kit Items must survive write/parse unchanged");
     }
 
     @Test

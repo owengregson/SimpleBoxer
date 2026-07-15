@@ -136,6 +136,10 @@ defaults:
     auto-pickup: false
     # Re-stamp the fixed kit every tick (a pure fixture whose gear never changes).
     lock-loadout: false
+    # Stamp every kit piece Unbreakable. Off (the default) lets gear wear like a
+    # real player's — armor chips on hit, weapons dull on attack, and a broken
+    # piece empties its slot. A locked kit (lock-loadout) is always unbreakable.
+    unbreakable-kit: false
     # Which hotbar slot (0-8) holds each tool the brain reaches for.
     weapon-slot: 0
     rod-slot: 1
