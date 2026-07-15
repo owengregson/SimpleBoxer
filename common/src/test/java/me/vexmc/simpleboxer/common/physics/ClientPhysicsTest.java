@@ -25,11 +25,18 @@ class ClientPhysicsTest {
     private static final class FlatWorld implements CollisionView {
         final double slip;
         final boolean floor;
+        /** When true every cell is a cobweb (no collision box, only a stuck stamp). */
+        final boolean web;
         final List<Box> extras = new ArrayList<>();
 
         FlatWorld(double slip, boolean floor) {
+            this(slip, floor, false);
+        }
+
+        FlatWorld(double slip, boolean floor, boolean web) {
             this.slip = slip;
             this.floor = floor;
+            this.web = web;
         }
 
         @Override
@@ -50,6 +57,11 @@ class ClientPhysicsTest {
         @Override
         public double slipperiness(int blockX, int blockY, int blockZ) {
             return slip;
+        }
+
+        @Override
+        public Vec3d stuckMultiplier(int blockX, int blockY, int blockZ) {
+            return web ? new Vec3d(0.25, 0.05, 0.25) : null;
         }
     }
 
@@ -347,5 +359,42 @@ class ClientPhysicsTest {
         }
         assertTrue(knocked.x() > 0.5, "held strafe steers the flight");
         assertEquals(0.0, passive.x(), 1.0E-9, "input-free flight stays straight");
+    }
+
+    @Test
+    void webClampsHorizontalAndVerticalSpeed() {
+        // Web everywhere, no floor: isolate the stuck clamp from ground collision.
+        // Vanilla Entity.move, when stuckSpeedMultiplier is set, multiplies the
+        // MOVEMENT by (0.25, 0.05, 0.25) and then zeroes deltaMovement — so this
+        // tick ships a quartered horizontal / twentieth vertical step, and the
+        // carried velocity is wiped (vertical then restarts at the gravity stamp).
+        FlatWorld world = new FlatWorld(0.6, false, true);
+        ClientPhysics physics = new ClientPhysics(0.0, 0.0, 0.0);
+        physics.applyVelocity(0.8, 0.4, 0.8);
+        physics.step(MoveInput.IDLE, 0.0f, world);
+        assertEquals(0.8 * 0.25, physics.x(), 1.0E-12, "web quarters the horizontal step (x)");
+        assertEquals(0.8 * 0.25, physics.z(), 1.0E-12, "web quarters the horizontal step (z)");
+        assertEquals(0.4 * 0.05, physics.y(), 1.0E-12, "web cuts the vertical step to a twentieth");
+        assertEquals(0.0, physics.velocity().x(), 1.0E-12, "carried x velocity is wiped");
+        assertEquals(0.0, physics.velocity().z(), 1.0E-12, "carried z velocity is wiped");
+        // Velocity zeroed, then the tick's gravity stamp: (0 − 0.08) × 0.98.
+        assertEquals(-0.0784, physics.velocity().y(), 1.0E-9, "vertical restarts at the gravity stamp");
+    }
+
+    @Test
+    void webTerminalSpeed() {
+        // Stone floor blanketed in web. Because the web zeroes carried velocity
+        // every tick, the boxer only ever ships ONE tick of ground-walk
+        // acceleration (0.098), quartered by the web's x/z stamp — there is no
+        // geometric ramp to an air-drag terminal like the open-floor walk.
+        FlatWorld world = new FlatWorld(0.6, true, true);
+        ClientPhysics physics = grounded(world);
+        double perTick = 0.0;
+        for (int tick = 0; tick < 200; tick++) {
+            double before = physics.z();
+            physics.step(MoveInput.walkForward(), 0.0f, world);
+            perTick = physics.z() - before;
+        }
+        assertEquals(0.098 * 0.25, perTick, 1.0E-6, "web walk displacement per tick (0.0245)");
     }
 }

@@ -2,6 +2,7 @@ package me.vexmc.simpleboxer.common.physics;
 
 import java.util.List;
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 
 /**
  * The vanilla client's movement integrator for a player on land, distilled
@@ -12,8 +13,12 @@ import org.jetbrains.annotations.NotNull;
  * world collides it, drags decay it — in that order, with the drag factor
  * chosen from the PRE-move ground state.
  *
+ * <p>Cobwebs (and any other {@code makeStuckInBlock} block, e.g. sweet berry
+ * bush) ARE modelled: {@link CollisionView#stuckMultiplier} exposes the vanilla
+ * per-axis stamp and {@link #step} applies it like {@code Entity.move}.</p>
+ *
  * <p>Deliberately unsupported (boxers spar on arena floors): fluids,
- * ladders, elytra, cobwebs, powder snow, block speed factors, vehicles.</p>
+ * ladders, elytra, powder snow, block speed factors, vehicles.</p>
  */
 public final class ClientPhysics {
 
@@ -160,11 +165,58 @@ public final class ClientPhysics {
                 : (input.sprint() ? SPRINT_AIR_ACCEL : WALK_AIR_ACCEL);
         accelerate(strafe, forward, speed, yawDegrees);
 
+        // 4. makeStuckInBlock (Entity.move): a cobweb has no collision box, so
+        //    the only trace of it is the per-axis stuck stamp. Vanilla, at the
+        //    TOP of the move, multiplies the MOVEMENT by it and then zeroes
+        //    deltaMovement — the cell thus ships a fraction of the step this
+        //    tick AND wipes the carried velocity, so there is no accumulation.
+        //    Queried on the pre-move box (the brain ticks region-locally; the
+        //    one-tick detection lag vanilla carries is immaterial for combat).
+        Vec3d stuck = stuckMultiplier(world);
+        if (stuck != null) {
+            this.vx *= stuck.x();
+            this.vy *= stuck.y();
+            this.vz *= stuck.z();
+        }
+
         move(world);
+
+        if (stuck != null) {
+            this.vx = 0.0;
+            this.vy = 0.0;
+            this.vz = 0.0;
+        }
 
         this.vx *= drag;
         this.vz *= drag;
         this.vy = (vy - GRAVITY) * VERTICAL_DRAG;
+    }
+
+    /**
+     * The vanilla {@code makeStuckInBlock} stamp for the block cells the player
+     * box occupies, or {@code null} if none does. Iterates the cells vanilla's
+     * {@code checkInsideBlocks} would (the box inset by {@link #EPSILON}), taking
+     * the first stuck cell found — all vanilla stuck stamps are cell-uniform.
+     */
+    private @Nullable Vec3d stuckMultiplier(@NotNull CollisionView world) {
+        Box box = boundingBox();
+        int minX = floor(box.minX() + EPSILON);
+        int minY = floor(box.minY() + EPSILON);
+        int minZ = floor(box.minZ() + EPSILON);
+        int maxX = floor(box.maxX() - EPSILON);
+        int maxY = floor(box.maxY() - EPSILON);
+        int maxZ = floor(box.maxZ() - EPSILON);
+        for (int bx = minX; bx <= maxX; bx++) {
+            for (int by = minY; by <= maxY; by++) {
+                for (int bz = minZ; bz <= maxZ; bz++) {
+                    Vec3d stuck = world.stuckMultiplier(bx, by, bz);
+                    if (stuck != null) {
+                        return stuck;
+                    }
+                }
+            }
+        }
+        return null;
     }
 
     private double movementSpeed(boolean sprinting) {

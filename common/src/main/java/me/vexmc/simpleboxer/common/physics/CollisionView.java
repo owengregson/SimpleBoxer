@@ -2,6 +2,7 @@ package me.vexmc.simpleboxer.common.physics;
 
 import java.util.List;
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 
 /**
  * The world geometry the client emulator collides against. Core implements
@@ -18,4 +19,16 @@ public interface CollisionView {
      * UNDER the feet decides ground drag (0.6 default, 0.98 ice, 0.8 slime).
      */
     double slipperiness(int blockX, int blockY, int blockZ);
+
+    /**
+     * The vanilla "stuck in block" per-axis motion multiplier for the block at
+     * the given position (cobweb → {@code (0.25, 0.05, 0.25)}, sweet berry bush
+     * → {@code (0.8, 0.75, 0.8)}), or {@code null} when the block imposes none.
+     * The integrator multiplies its motion componentwise by this before the
+     * move/collide, mirroring {@code Entity.makeStuckInBlock}. Synthetic views
+     * that model no stuck blocks inherit the {@code null} default.
+     */
+    default @Nullable Vec3d stuckMultiplier(int blockX, int blockY, int blockZ) {
+        return null;
+    }
 }
