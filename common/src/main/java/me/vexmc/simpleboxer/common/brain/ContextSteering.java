@@ -52,6 +52,21 @@ public final class ContextSteering {
     private static final double POOR_CANDIDATE_SPEED = 0.5;
 
     /**
+     * The best along-wall slide must still retain at least this much of the desired
+     * direction (cosine) to count as an oblique GLANCE worth hugging. A head-on wall
+     * leaves only a ~perpendicular escape (cosine ~0) — below this — so it keeps the
+     * classic deflect instead of grinding a near-normal candidate into the wall.
+     */
+    private static final double OBLIQUE_SLIDE_MIN = 0.5;
+    /**
+     * The graze look-ahead at full travel speed: a candidate clear for at least this
+     * far only clips the wall further out, so {@code ClientPhysics.collide} slides it
+     * rather than stopping it. Roughly one sprint step. At a crawl the look-ahead
+     * relaxes back to {@link NavGeometry#LOOK_AHEAD} (a stopped boxer can't slide).
+     */
+    private static final double WALL_GRAZE_MIN_AHEAD = 0.28;
+
+    /**
      * Steer {@code desiredDirWorld} into the cleanest nearby heading: full-speed
      * toward the goal on open ground, angled along walls when the goal points into
      * one, and easing off near ledges. Returns {@link MoveHeading#STILL} when there
@@ -64,6 +79,11 @@ public final class ContextSteering {
      */
     public @NotNull MoveHeading steer(@NotNull Perception p, @NotNull Vec3d desiredDirWorld,
             @NotNull CollisionView world) {
+        return steer(p, desiredDirWorld, world, false);
+    }
+
+    public @NotNull MoveHeading steer(@NotNull Perception p, @NotNull Vec3d desiredDirWorld,
+            @NotNull CollisionView world, boolean mayLeaveLedges) {
         Vec3d desired = desiredDirWorld.horizontalNormalized();
         if (desired.lengthSqr() < 1.0E-8) {
             return MoveHeading.STILL; // no goal direction — hold position
@@ -71,9 +91,12 @@ public final class ContextSteering {
 
         Perception.SelfState self = p.self();
         Box box = NavGeometry.playerBox(self.x(), self.y(), self.z());
-        // A ledge is only dangerous in proportion to how fast we'd sail off it.
+        // A ledge is only dangerous in proportion to how fast we'd sail off it —
+        // unless this is a pursuit that MAY leave ledges (chasing a target off an
+        // edge like a real client), in which case the drop costs nothing.
         double speedFactor = Math.min(1.0, self.velocity().horizontalLength() / REFERENCE_SPEED);
-        double ledgeCost = LEDGE_PENALTY * (LEDGE_MIN_FACTOR + (1.0 - LEDGE_MIN_FACTOR) * speedFactor);
+        double ledgeCost = mayLeaveLedges ? 0.0
+                : LEDGE_PENALTY * (LEDGE_MIN_FACTOR + (1.0 - LEDGE_MIN_FACTOR) * speedFactor);
 
         Vec3d bestDir = desired;
         double bestScore = Double.NEGATIVE_INFINITY;
@@ -102,7 +125,25 @@ public final class ContextSteering {
             }
         }
 
-        boolean nearLedge = NavGeometry.ledgeAhead(world, box, bestDir,
+        // Oblique wall pass-through: when the goal points into a wall but the best
+        // slide still GLANCES along it (keeps most of the desired direction), prefer
+        // the candidate NEAREST to desired that merely grazes the wall at speed —
+        // ClientPhysics.collide finishes the slide — instead of snapping to the pure
+        // along-wall perpendicular. A genuinely head-on wall (best slide ~normal to
+        // desired) fails the glance test and keeps the classic deflect.
+        Vec3d graze = obliqueGraze(world, box, desired, bestDir, bestDanger, speedFactor,
+                mayLeaveLedges);
+        if (graze != null) {
+            boolean grazeLedge = !mayLeaveLedges && NavGeometry.ledgeAhead(world, box, graze,
+                    NavGeometry.LOOK_AHEAD, LEDGE_MAX_DROP);
+            // A grazing slide is a compromised heading: ease off so collide's slide
+            // stays controlled (the motor duty-cycles the digital forward).
+            return new MoveHeading(graze, grazeLedge, POOR_CANDIDATE_SPEED);
+        }
+
+        // A pursuit that may leave ledges must not then crawl-sneak off the edge:
+        // suppress the near-ledge ease-off so it steps off at pace toward the target.
+        boolean nearLedge = !mayLeaveLedges && NavGeometry.ledgeAhead(world, box, bestDir,
                 NavGeometry.LOOK_AHEAD, LEDGE_MAX_DROP);
         // Ease off only when we're settling for a compromised heading — either
         // something still dangerous ahead, or no candidate makes real progress.
@@ -129,5 +170,52 @@ public final class ContextSteering {
             danger += ledgeCost;
         }
         return danger;
+    }
+
+    /**
+     * The candidate NEAREST to {@code desired} that only grazes a wall it points
+     * obliquely into — or {@code null} when this is not an oblique-wall situation
+     * (desired is clear, boxed in, or the best slide is near-normal to desired).
+     *
+     * <p>Gated so it never fires on a head-on wall: the classic best slide
+     * ({@code bestDir}) must be clear AND still retain most of {@code desired}
+     * (an oblique glance). Then a candidate qualifies only if it is nearer to
+     * desired than {@code bestDir}, clear within the speed-scaled graze look-ahead
+     * (so {@code ClientPhysics.collide} slides it rather than stopping it), and does
+     * not step off a ledge (unless pursuit may).
+     */
+    private static Vec3d obliqueGraze(@NotNull CollisionView world, @NotNull Box box,
+            @NotNull Vec3d desired, @NotNull Vec3d bestDir, double bestDanger,
+            double speedFactor, boolean mayLeaveLedges) {
+        boolean desiredBlocked = NavGeometry.wallAhead(world, box, desired, NavGeometry.LOOK_AHEAD);
+        boolean bestGlances = bestDanger < WALL_PENALTY && bestDir.dot(desired) > OBLIQUE_SLIDE_MIN;
+        if (!desiredBlocked || !bestGlances) {
+            return null;
+        }
+        // Faster travel carries further into a graze before collision bites, so the
+        // look-ahead relaxes toward WALL_GRAZE_MIN_AHEAD; a crawl keeps the full one.
+        double grazeAhead = NavGeometry.LOOK_AHEAD
+                - (NavGeometry.LOOK_AHEAD - WALL_GRAZE_MIN_AHEAD) * speedFactor;
+
+        Vec3d graze = null;
+        double bestDot = bestDir.dot(desired);
+        for (int i = 0; i < CANDIDATES; i++) {
+            double theta = (2.0 * Math.PI * i) / CANDIDATES;
+            Vec3d cand = new Vec3d(Math.cos(theta), 0.0, Math.sin(theta));
+            double dot = cand.dot(desired);
+            if (dot <= bestDot + 1.0E-9) {
+                continue; // not nearer to desired than what we already have
+            }
+            if (NavGeometry.wallAhead(world, box, cand, grazeAhead)) {
+                continue; // a wall even at the graze reach — too head-on to slide
+            }
+            if (!mayLeaveLedges
+                    && NavGeometry.ledgeAhead(world, box, cand, NavGeometry.LOOK_AHEAD, LEDGE_MAX_DROP)) {
+                continue; // don't graze off a ledge
+            }
+            graze = cand;
+            bestDot = dot;
+        }
+        return graze;
     }
 }

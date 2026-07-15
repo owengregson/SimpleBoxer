@@ -1,5 +1,70 @@
 # Changelog
 
+## 0.6.0 — combat, navigation & fidelity upgrade
+
+A follow-up to the 0.5.0 rework. Boxers move, fight, and survive more like a real
+client: they slide off walls and are trapped by cobwebs, path in true 3D (up
+stairs, down drops, across gaps — including to elevated targets), strafe
+decisively and pick sides, throw a finite supply of splash potions fluidly, and
+wear their kit like a real player. Everything still sits *upstream* of the move
+input / action list / aim seams, so a boxer takes knockback and hit registration
+exactly like a real player with the same state.
+
+### Movement & physics
+- **Cobwebs now trap boxers.** The client integrator models vanilla
+  `makeStuckInBlock` (cobweb ×0.25/0.05/0.25, sweet-berry bush), so a boxer
+  caught in a web is slowed exactly like a real client — it can no longer walk or
+  hit through webs at full speed. Non-web motion is byte-identical.
+- **Boxers slide off surfaces.** Pursuers walk *off* ledges toward their target
+  instead of clinging to platform edges; they graze *along* walls when the goal
+  points obliquely into one instead of snapping 90°; and they ease off near a
+  hazard by crouching (the previously-computed slow-down is now actually applied).
+  The collision integrator was already vanilla-faithful — it slides along walls
+  and off ledges, now pinned by a dedicated test — so the old "sticking" lived in
+  the steering layer above it, which is what changed.
+
+### Pathfinding — Baritone-quality, server-side
+- **A real 3D voxel A\*** (`BaritoneStylePlanner`) replaces the 2.5D local
+  planner: traverse / diagonal / ascend / descend / multi-block fall, with a
+  tick-scaled cost model ported from Baritone's `ActionCosts` and an admissible
+  sprint heuristic. Baritone itself is a client mod and cannot run server-side —
+  this is a clean-room reimplementation over the plugin's collision seam, so it
+  spans 1.17.1 → 26.x with no bundled dependency.
+- **Reaches elevated targets.** When a target sits on a platform reachable only
+  by stairs or step-ups *off the direct line*, the boxer now discovers and takes
+  that access route instead of stalling directly underneath it — a vertical
+  heuristic term makes the search seek elevation, and a proactive elevation gate
+  runs the planner before the boxer gets stuck.
+- **Degrades gracefully** — an anytime partial path always heads toward the goal,
+  and the whole search stays inside the readable region (Folia-safe).
+
+### Combat
+- **Predictive strafing that actually picks a side.** The old adaptive orbit
+  could only hold or blind-flip a fixed side off an unsigned, dead-zoned signal.
+  It now actively *chooses* a side from the opponent's signed aim-tracking rate
+  and velocity, jukes to break a lock, and can time the change onto the w-tap
+  sprint re-press. Named presets — `none` / `orbit` / `juke` / `wtap-sync` —
+  replace the bare on/off toggle, and circle-strafe is more decisive at range.
+
+### Survival & kit
+- **Fluid potion play with a finite supply.** A `fill-splash-pots` toggle seeds
+  the hotbar with a finite number of instant-health splash potions
+  (`splash-pot-count`) that the boxer throws to heal and can genuinely run out of.
+  The heal routine no longer stands robotically still — it throws while juking
+  sideways in the cloud and starts aiming down a tick early so the pot lands at
+  its feet.
+- **Kits wear like a real client.** Armor chips on hit, weapons dull on attack,
+  and a broken piece empties its slot — all via the vanilla durability paths, now
+  that the `unbreakable-kit` toggle (default: wear) gates the old Unbreakable
+  stamp. Locked/fixture kits stay unbreakable so calibration dummies spar forever.
+
+### Notes
+- The "boxer glued to a wall" report was investigated at length: the client
+  integrator is proven to slide down walls in every synthetic and in-server case
+  we could construct, and it is not a server position-correction. Debug forensics
+  (`-Dsimpleboxer.debug=true`) now log the sim-vs-server position on wall contact
+  to pinpoint any remaining case from a live session.
+
 ## 0.5.0 — the boxer rework
 
 A ground-up rework of how boxers think, move, fight, and survive. The client

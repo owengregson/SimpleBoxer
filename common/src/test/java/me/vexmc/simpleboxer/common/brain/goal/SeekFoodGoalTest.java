@@ -39,7 +39,7 @@ class SeekFoodGoalTest {
                 Perception.UseItemState.NONE, false);
         Perception.TargetState target = hasTarget
                 ? new Perception.TargetState(distance, 64.0, 0.0, 65.6, Vec3d.ZERO,
-                        0.0, 0.0, distance, false)
+                        0.0, 0.0, 0.0, distance, false)
                 : null;
         Perception.InventoryView inv = new Perception.InventoryView(
                 true, false, false, hasFood, false, 0);

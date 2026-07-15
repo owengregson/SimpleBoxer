@@ -44,7 +44,10 @@ public final class Brain {
     private final ContextSteering steering = new ContextSteering();
     private final ProactiveJump proactiveJump = new ProactiveJump();
     private final AntiStuck antiStuck = new AntiStuck();
-    private final LocalPathPlanner planner = new LocalPathPlanner();
+    // Baritone-style 3D voxel A* (traverse/diagonal/ascend/descend/fall) — same
+    // route() seam as the retired LocalPathPlanner, but it finds elevation routes
+    // (stairs/step-ups off the direct line) and degrades to an anytime partial.
+    private final BaritoneStylePlanner planner = new BaritoneStylePlanner();
     private final MotorQuantizer motor = new MotorQuantizer();
     private final ClickController clicks = new ClickController();
     private final BlockhitController blockhit = new BlockhitController();
@@ -120,12 +123,15 @@ public final class Brain {
         applyFacing(p, intent.facing());
 
         // 2. Motor: make the desired world heading collision-smart, then quantize.
-        MoveHeading heading = resolveHeading(p, intent, world);
+        MoveHeading heading = resolveHeading(p, intent, world, decision.goal().mayLeaveLedges());
         JumpHint jump = proactiveJump.evaluate(p, heading, world, memory);
         if (intent.jump() == JumpHint.JUMP) {
             jump = JumpHint.JUMP;
         }
-        MoveInput move = motor.toInput(heading, aim.yaw(), intent.wantSprint(), jump, false);
+        // Consume the collision-aware ease-off: duty-cycle the softened forward for
+        // heading.speedScale() < 1 and sneak near a ledge, keyed off a monotonic phase.
+        MoveInput move = motor.toInput(heading, aim.yaw(), intent.wantSprint(), jump, false,
+                memory.motorTick++);
 
         // 3. Actions: the goal/routine's item action, then CPS-clocked clicks.
         List<ActionIntent> actions = new ArrayList<>(2);
@@ -180,7 +186,8 @@ public final class Brain {
      * anti-stuck detours and (if that keeps failing) a bounded path planner routes
      * around the obstacle toward the target.
      */
-    private MoveHeading resolveHeading(Perception p, Intent intent, CollisionView world) {
+    private MoveHeading resolveHeading(Perception p, Intent intent, CollisionView world,
+            boolean mayLeaveLedges) {
         Vec3d desired = intent.moveDirWorld();
         if (desired.horizontalDistanceSqr() < 1.0E-8) {
             memory.clearPath();
@@ -191,14 +198,26 @@ public final class Brain {
         // moment short-term progress resumes, or the boxer thrashes between routing
         // around the obstacle and steering straight back into it.
         if (memory.path != null) {
-            MoveHeading routed = followRoute(p, world);
+            MoveHeading routed = followRoute(p, world, mayLeaveLedges);
             if (routed != null) {
                 return routed;
             }
             memory.clearPath();
         }
 
-        MoveHeading heading = steering.steer(p, desired, world);
+        // Elevation-aware pathing (proactive, not a stuck-rescue): when the target
+        // sits on a different level — a platform reachable only by stairs/step-ups
+        // that may run AWAY from the direct line — plan a 3D route now, so the boxer
+        // seeks the access route instead of pressing uselessly straight under (or
+        // over) the target. Reactive steering can't discover an off-line staircase.
+        if (needsElevationRoute(p, desired) && planRoute(p, world)) {
+            MoveHeading routed = followRoute(p, world, mayLeaveLedges);
+            if (routed != null) {
+                return routed;
+            }
+        }
+
+        MoveHeading heading = steering.steer(p, desired, world, mayLeaveLedges);
 
         // Advance the stall counter every tick, but only ACT on it when the boxer
         // is genuinely trying to close on the target FROM A DISTANCE (an approach
@@ -211,7 +230,7 @@ public final class Brain {
             return heading;
         }
         if (antiStuck.shouldReroute(memory) && planRoute(p, world)) {
-            MoveHeading routed = followRoute(p, world);
+            MoveHeading routed = followRoute(p, world, mayLeaveLedges);
             if (routed != null) {
                 return routed;
             }
@@ -228,6 +247,27 @@ public final class Brain {
         Vec3d toTarget = new Vec3d(t.x() - p.self().x(), 0.0, t.z() - p.self().z())
                 .horizontalNormalized();
         return desired.horizontalNormalized().dot(toTarget) > 0.4;
+    }
+
+    /** Vertical gap (blocks) beyond which the target counts as a different LEVEL — more
+     *  than a running jump can bridge directly, so it needs a planned access route. */
+    private static final double ELEVATION_GAP = 1.5;
+
+    /**
+     * True when the target sits on a different level than the boxer (a raised or sunken
+     * platform more than a step/jump away vertically) and the boxer is trying to close
+     * on it. Reactive steering reasons only in the horizontal plane, so it cannot
+     * discover an off-line staircase up to the target; the 3D planner can, and running
+     * it proactively here (not as a stuck-rescue) is what makes the boxer go find the
+     * stairs instead of stalling directly under the platform.
+     */
+    private static boolean needsElevationRoute(Perception p, Vec3d desired) {
+        Perception.TargetState t = p.target();
+        if (t == null) {
+            return false;
+        }
+        boolean elevationGap = Math.abs(t.y() - p.self().y()) > ELEVATION_GAP;
+        return elevationGap && t.distance() > 2.0 && isApproaching(p, desired);
     }
 
     /** Plan a fresh bounded route to the target; returns true and stores it if found. */
@@ -258,7 +298,7 @@ public final class Brain {
      * next. Returns {@code null} — signalling the caller to drop the route — when it
      * is exhausted or the target has wandered far from where the route was planned.
      */
-    private MoveHeading followRoute(Perception p, CollisionView world) {
+    private MoveHeading followRoute(Perception p, CollisionView world, boolean mayLeaveLedges) {
         if (memory.path == null || memory.pathCursor >= memory.path.size()) {
             return null;
         }
@@ -279,7 +319,7 @@ public final class Brain {
         if (toWaypoint.horizontalDistanceSqr() < 1.0E-8) {
             return null;
         }
-        return steering.steer(p, toWaypoint, world);
+        return steering.steer(p, toWaypoint, world, mayLeaveLedges);
     }
 
     private static long cell(double x, double z) {

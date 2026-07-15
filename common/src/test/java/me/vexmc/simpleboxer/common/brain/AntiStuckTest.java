@@ -22,7 +22,7 @@ class AntiStuckTest {
         SelfState self = new SelfState(x, y, z, Vec3d.ZERO, true, hcol,
                 1.0, 1.0, UseItemState.NONE, false);
         TargetState target = hasTarget
-                ? new TargetState(x + 3, y, z, y + 1.62, Vec3d.ZERO, 0.0, 0.0, 3.0, false)
+                ? new TargetState(x + 3, y, z, y + 1.62, Vec3d.ZERO, 0.0, 0.0, 0.0, 3.0, false)
                 : null;
         return new Perception(self, target, TerrainView.OPEN,
                 InventoryView.EMPTY, CombatState.IDLE, 0);

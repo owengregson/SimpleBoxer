@@ -23,6 +23,10 @@ public final class BrainMemory {
     public @Nullable String incumbentGoal;
     public int dwellTicks;
 
+    /* Monotonic decision-tick counter — the phase the motor duty-cycles a softened
+     * forward key against (easing off near walls/ledges without a fractional impulse). */
+    public int motorTick;
+
     /* Strafe state (moved out of BoxerImpl). */
     public int strafeSign = 1;
     public int strafeFlipIn;
@@ -30,6 +34,10 @@ public final class BrainMemory {
     /* W-tap / s-tap sprint-reset state machine. */
     public int wtapCountdown = -1;
     public int wtapReleaseLeft;
+    /* Set for the single tick the forward key re-presses after a w-tap release
+     * window (sprint about to re-arm) — the seam adaptive strafing syncs a juke
+     * to, so the direction change and the fresh sprint knock land together. */
+    public boolean wtapRepressed;
 
     /* Follow-up-over-terrain gate. */
     public int climbTicks;

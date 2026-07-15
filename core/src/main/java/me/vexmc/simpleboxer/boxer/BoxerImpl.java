@@ -24,6 +24,7 @@ import me.vexmc.simpleboxer.nms.NmsBridge;
 import me.vexmc.simpleboxer.nms.PacketIO;
 import org.bukkit.GameMode;
 import org.bukkit.Location;
+import org.bukkit.Material;
 import org.bukkit.attribute.Attribute;
 import org.bukkit.attribute.AttributeInstance;
 import org.bukkit.entity.Player;
@@ -284,8 +285,13 @@ final class BoxerImpl implements Boxer {
             loadoutDirty = false;
             if (!syncKit()) {
                 loadoutDirty = true;
+            } else {
+                seedConsumables();
             }
         }
+        // Keep the pot slot loaded from the finite splash-pot reserve so the heal
+        // routine can throw again next cycle — until the whole supply runs out.
+        restockPotSlot();
         if (serverTicksEntity && hasAnchor) {
             reanchorServerPosition();
         }
@@ -344,6 +350,17 @@ final class BoxerImpl implements Boxer {
         queueInput(input, now);
         physics.step(input, aimYaw, collisionView);
         pushAwayFromNeighbors();
+
+        // Matrix forensics: trace the sim vs server-entity Y whenever the boxer is
+        // wall-collided — the diff exposes any sim<->server divergence on contact
+        // (e.g. a "stuck on the wall" report). Behind -Dsimpleboxer.debug.
+        if (DEBUG && physics.horizontalCollision()) {
+            Location serverLoc = spawned.player().getLocation();
+            logger.info(String.format(
+                    "[debug %s] wallCollide sim=(%.3f,%.3f,%.3f) vy=%.4f onGround=%b | server=(%.3f,%.3f,%.3f)",
+                    name, physics.x(), physics.y(), physics.z(), physics.velocity().y(),
+                    physics.onGround(), serverLoc.getX(), serverLoc.getY(), serverLoc.getZ()));
+        }
 
         // 3. Report movement the way a real client does.
         queueMovement(now);
@@ -519,6 +536,14 @@ final class BoxerImpl implements Boxer {
             double y = sync.relativeY() ? physics.y() + sync.y() : sync.y();
             double z = sync.relativeZ() ? physics.z() + sync.z() : sync.z();
             var velocity = physics.velocity();
+            // Matrix forensics: log every server position-correction the boxer adopts
+            // (teleport / "moved wrongly" resync) — behind -Dsimpleboxer.debug.
+            if (DEBUG) {
+                logger.info(String.format(
+                        "[debug %s] POSITION-CORRECTION sim=(%.3f,%.3f,%.3f) -> (%.3f,%.3f,%.3f) relY=%b hColl=%b",
+                        name, physics.x(), physics.y(), physics.z(), x, y, z,
+                        sync.relativeY(), physics.horizontalCollision()));
+            }
             physics.teleport(x, y, z);
             if (sync.velocity() != null) {
                 Inbound.PositionSync.Motion motion = sync.velocity();
@@ -568,14 +593,16 @@ final class BoxerImpl implements Boxer {
                 hasPrevTargetYaw = false;
                 prevAimTarget = view.entity();
             }
-            double trackRate = 0.0;
+            double signedTrackRate = 0.0;
             if (hasPrevTargetYaw) {
-                trackRate = Math.abs(wrapDegrees(view.yaw() - prevTargetYaw));
+                signedTrackRate = wrapDegrees(view.yaw() - prevTargetYaw);
             }
+            double trackRate = Math.abs(signedTrackRate);
             prevTargetYaw = view.yaw();
             hasPrevTargetYaw = true;
             targetState = new Perception.TargetState(view.x(), view.y(), view.z(), view.eyeY(),
-                    new Vec3d(view.vx(), 0.0, view.vz()), bearingToMe, trackRate, distance, view.blocking());
+                    new Vec3d(view.vx(), 0.0, view.vz()), bearingToMe, trackRate, signedTrackRate,
+                    distance, view.blocking());
         } else {
             hasPrevTargetYaw = false;
         }
@@ -600,6 +627,113 @@ final class BoxerImpl implements Boxer {
 
     private static @Nullable ItemStack slot(PlayerInventory inventory, int hotbarSlot) {
         return hotbarSlot >= 0 && hotbarSlot <= 8 ? inventory.getItem(hotbarSlot) : null;
+    }
+
+    /**
+     * Fill the boxer's finite splash-potion reserve when the config toggle asks for
+     * it. Instant-health SPLASH_POTIONs (which do not stack) go into the pot slot and
+     * then the next free, non-tool hotbar slots, up to {@code splashPotCount}. Runs on
+     * the owning thread at the loadout-dirty seam (spawn/respawn/equip), so a respawn
+     * refills a fresh supply; only empty slots are written.
+     */
+    private void seedConsumables() {
+        BoxerSettings.Items items = settings.items();
+        if (!items.fillSplashPots() || items.splashPotCount() <= 0) {
+            return;
+        }
+        PlayerInventory inventory = spawned.player().getInventory();
+        java.util.Set<Integer> reserved = java.util.Set.of(
+                items.weaponSlot(), items.rodSlot(), items.foodSlot(), items.blockSlot());
+        int placed = 0;
+        for (int hotbar = items.potSlot(); hotbar <= 8 && placed < items.splashPotCount(); hotbar++) {
+            if (hotbar != items.potSlot() && reserved.contains(hotbar)) {
+                continue; // keep the configured tool slots free
+            }
+            ItemStack existing = inventory.getItem(hotbar);
+            if (existing == null || existing.getType().isAir()) {
+                inventory.setItem(hotbar, splashHealPotion());
+                placed++;
+            }
+        }
+    }
+
+    /**
+     * When the pot slot has emptied (a pot was thrown) but reserves remain elsewhere in
+     * the hotbar, slide the next splash potion into the pot slot so the routine can throw
+     * again — a real player scrolling to their next pot. When no reserve is left the pot
+     * slot stays empty and {@code inventoryView().hasPots()} goes false, so the heal
+     * routine gives up: the supply has genuinely run out.
+     */
+    private void restockPotSlot() {
+        BoxerSettings.Items items = settings.items();
+        if (!items.fillSplashPots()) {
+            return;
+        }
+        PlayerInventory inventory = spawned.player().getInventory();
+        ItemStack held = slot(inventory, items.potSlot());
+        if (held != null && !held.getType().isAir()) {
+            return; // the pot slot is already loaded
+        }
+        for (int hotbar = 0; hotbar <= 8; hotbar++) {
+            if (hotbar == items.potSlot()) {
+                continue;
+            }
+            ItemStack candidate = inventory.getItem(hotbar);
+            if (ItemCategory.is(candidate, ItemCategory.POTION)) {
+                inventory.setItem(items.potSlot(), candidate);
+                inventory.setItem(hotbar, null);
+                return;
+            }
+        }
+    }
+
+    /**
+     * A splash instant-health potion, built to survive the 1.17.1 → 26.x matrix: the
+     * potion-type constant ({@code INSTANT_HEAL} → {@code HEALING} in 1.20.5) and the
+     * meta setter ({@code setBasePotionData} → {@code setBasePotionType}) both changed,
+     * so both are resolved reflectively with fallbacks. A failure degrades to a plain
+     * splash potion — still a thrown, depletable POTION, just without the stamped effect.
+     */
+    private @NotNull ItemStack splashHealPotion() {
+        ItemStack potion = new ItemStack(Material.SPLASH_POTION);
+        try {
+            org.bukkit.inventory.meta.ItemMeta meta = potion.getItemMeta();
+            if (meta instanceof org.bukkit.inventory.meta.PotionMeta potionMeta) {
+                stampInstantHeal(potionMeta);
+                potion.setItemMeta(potionMeta);
+            }
+        } catch (Throwable versionDrift) {
+            if (DEBUG) {
+                logger.info("[debug " + name + "] splash-heal stamp fell back to plain: " + versionDrift);
+            }
+        }
+        return potion;
+    }
+
+    private static void stampInstantHeal(@NotNull org.bukkit.inventory.meta.PotionMeta meta)
+            throws Exception {
+        Class<?> potionType = org.bukkit.potion.PotionType.class;
+        Object heal = null;
+        for (String candidate : new String[] {"HEALING", "INSTANT_HEAL"}) {
+            try {
+                heal = potionType.getField(candidate).get(null); // enum constant / static field
+                break;
+            } catch (NoSuchFieldException notThisVersion) {
+                // try the other name
+            }
+        }
+        if (heal == null) {
+            return; // neither constant exists on this version — leave it plain
+        }
+        try {
+            meta.getClass().getMethod("setBasePotionType", potionType).invoke(meta, heal);
+            return;
+        } catch (NoSuchMethodException legacy) {
+            // pre-1.20.5: fall back to the PotionData API
+        }
+        Class<?> potionData = Class.forName("org.bukkit.potion.PotionData");
+        Object data = potionData.getConstructor(potionType).newInstance(heal);
+        meta.getClass().getMethod("setBasePotionData", potionData).invoke(meta, data);
     }
 
     /** Lowers one brain {@link ActionIntent} onto the action latency line. */
@@ -957,19 +1091,30 @@ final class BoxerImpl implements Boxer {
      */
     private boolean syncKit() {
         Loadout kit = loadout;
+        // A locked kit is re-stamped every tick and so is implicitly unbreakable;
+        // otherwise the operator's unbreakable-kit toggle decides. When neither is
+        // set the gear wears like a real player's (vanilla armor/weapon/break paths).
+        boolean unbreakable = settings.items().unbreakableKit() || settings.items().lockLoadout();
         try {
             PlayerInventory inventory = spawned.player().getInventory();
-            inventory.setHelmet(durable(kit.helmet()));
-            inventory.setChestplate(durable(kit.chestplate()));
-            inventory.setLeggings(durable(kit.leggings()));
-            inventory.setBoots(durable(kit.boots()));
-            inventory.setItemInOffHand(durable(kit.offHand()));
+            applyPiece(inventory.getHelmet(), durable(kit.helmet(), unbreakable),
+                    inventory::setHelmet);
+            applyPiece(inventory.getChestplate(), durable(kit.chestplate(), unbreakable),
+                    inventory::setChestplate);
+            applyPiece(inventory.getLeggings(), durable(kit.leggings(), unbreakable),
+                    inventory::setLeggings);
+            applyPiece(inventory.getBoots(), durable(kit.boots(), unbreakable),
+                    inventory::setBoots);
+            applyPiece(inventory.getItemInOffHand(), durable(kit.offHand(), unbreakable),
+                    inventory::setItemInOffHand);
             // The main-hand kit item goes to the configured weapon slot; the boxer
             // selects hotbar slots itself via SetCarriedItem, so we don't force
             // the selected slot here (that would fight a mid-fight rod/pot swap).
-            ItemStack main = durable(kit.mainHand());
+            ItemStack main = durable(kit.mainHand(), unbreakable);
             if (main != null || settings.items().lockLoadout()) {
-                inventory.setItem(settings.items().weaponSlot(), main);
+                int weaponSlot = settings.items().weaponSlot();
+                applyPiece(inventory.getItem(weaponSlot), main,
+                        piece -> inventory.setItem(weaponSlot, piece));
             }
             return true;
         } catch (Throwable failure) {
@@ -978,10 +1123,52 @@ final class BoxerImpl implements Boxer {
         }
     }
 
-    /** Stamp a kit piece Unbreakable so a tireless fixture's gear never wears out. */
-    private static @Nullable ItemStack durable(@Nullable ItemStack item) {
-        if (item == null) {
-            return null;
+    /**
+     * Write a kit piece to a slot only when it actually differs from what's worn,
+     * comparing IGNORING durability damage. So an operator {@code equip()}
+     * re-publish of the same kit mid-fight leaves accumulated wear in place, while
+     * an empty slot or a genuinely changed item is (re-)stamped. A respawned boxer
+     * starts with an empty inventory, so it always gets pristine gear back —
+     * vanilla-correct.
+     */
+    private static void applyPiece(@Nullable ItemStack worn, @Nullable ItemStack target,
+            @NotNull java.util.function.Consumer<ItemStack> setter) {
+        if (!sameIgnoringDamage(worn, target)) {
+            setter.accept(target);
+        }
+    }
+
+    /** Two kit pieces equal ignoring durability damage (same type/enchants/name/…). */
+    private static boolean sameIgnoringDamage(@Nullable ItemStack a, @Nullable ItemStack b) {
+        boolean aEmpty = a == null || a.getType().isAir();
+        boolean bEmpty = b == null || b.getType().isAir();
+        if (aEmpty || bEmpty) {
+            return aEmpty && bEmpty;
+        }
+        return zeroDamage(a).isSimilar(zeroDamage(b));
+    }
+
+    /** A clone with any durability damage cleared, so {@code isSimilar} ignores wear. */
+    private static @NotNull ItemStack zeroDamage(@NotNull ItemStack item) {
+        ItemStack copy = item.clone();
+        org.bukkit.inventory.meta.ItemMeta meta = copy.getItemMeta();
+        if (meta instanceof org.bukkit.inventory.meta.Damageable damageable) {
+            damageable.setDamage(0);
+            copy.setItemMeta(meta);
+        }
+        return copy;
+    }
+
+    /**
+     * Return a kit piece, stamping it Unbreakable only when the boxer's kit is
+     * configured unbreakable (or locked). Otherwise the piece is returned untouched
+     * and wears like a real player's gear — armor on hit, weapon on attack,
+     * break to an empty slot — all via the vanilla paths already run for the real
+     * {@link org.bukkit.entity.Player}.
+     */
+    private static @Nullable ItemStack durable(@Nullable ItemStack item, boolean unbreakable) {
+        if (item == null || !unbreakable) {
+            return item;
         }
         org.bukkit.inventory.meta.ItemMeta meta = item.getItemMeta();
         if (meta != null) {

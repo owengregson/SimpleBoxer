@@ -111,6 +111,16 @@ class BoxerSettingsParserTest {
     }
 
     @Test
+    void itemsUnbreakableKitParses() {
+        BoxerSettings parsed = BoxerSettingsParser.parse(yaml("""
+                items:
+                  unbreakable-kit: true
+                """), BoxerSettings.DEFAULTS, ignored -> {});
+        assertTrue(parsed.items().unbreakableKit(), "items.unbreakable-kit reads through");
+        assertFalse(BoxerSettings.DEFAULTS.items().unbreakableKit(), "the default kit wears");
+    }
+
+    @Test
     void sparseOverlayInheritsEverythingElse() {
         BoxerSettings parsed = BoxerSettingsParser.parse(
                 yaml("ping-ms: 150"), DifficultyPresets.HARD, ignored -> {});
@@ -153,7 +163,8 @@ class BoxerSettingsParserTest {
         assertTrue(DifficultyPresets.SWEAT.death().dropItemsOnDeath());
         assertTrue(DifficultyPresets.SWEAT.combat().blockHit());
         assertTrue(DifficultyPresets.SWEAT.combat().rodKnockback());
-        assertTrue(DifficultyPresets.SWEAT.combat().adaptiveStrafe());
+        assertEquals(BoxerSettings.Combat.StrafePreset.WTAP_SYNC,
+                DifficultyPresets.SWEAT.combat().strafePreset());
         assertTrue(DifficultyPresets.SWEAT.selfHeal().enabled());
         assertTrue(DifficultyPresets.SWEAT.hunger().natural());
     }

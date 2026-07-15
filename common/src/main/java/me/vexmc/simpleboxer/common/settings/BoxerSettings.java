@@ -138,15 +138,30 @@ public record BoxerSettings(
      *                       target back before committing to a melee combo.
      * @param rodMin         nearest range (blocks) the boxer will rod-poke from.
      * @param rodMax         farthest range (blocks) the boxer will rod-poke from.
-     * @param adaptiveStrafe choose strafe direction from how the opponent is
-     *                       tracking the boxer (break a tight aim, exploit a mistrack).
+     * @param strafePreset   how the circle-strafe chooses its side: {@code NONE}
+     *                       (a plain non-adaptive circle), {@code ORBIT} (break a
+     *                       tight aim), {@code JUKE} (also juke off the opponent's
+     *                       motion), or {@code WTAP_SYNC} (time jukes to the
+     *                       sprint re-press). Read only in STRAFE_CIRCLE style.
      * @param sTap           straight-line s-tap combos (sprint reset, no A/D strafe).
      * @param missChance     fraction of clicks intentionally aimed off-target [0,1].
      */
     public record Combat(boolean blockHit, boolean rodKnockback, double rodMin, double rodMax,
-            boolean adaptiveStrafe, boolean sTap, double missChance) {
+            @NotNull StrafePreset strafePreset, boolean sTap, double missChance) {
 
-        public static final Combat OFF = new Combat(false, false, 3.0, 6.0, false, false, 0.0);
+        /**
+         * The named circle-strafe behaviors. {@code NONE} is a plain circle;
+         * the rest read the opponent's aim (and, from {@code JUKE} up, motion)
+         * to decisively choose the side to open.
+         */
+        public enum StrafePreset {
+            NONE,
+            ORBIT,
+            JUKE,
+            WTAP_SYNC
+        }
+
+        public static final Combat OFF = new Combat(false, false, 3.0, 6.0, StrafePreset.NONE, false, 0.0);
 
         public Combat {
             if (rodMin < 0.5 || rodMin > 6.0) {
@@ -197,11 +212,20 @@ public record BoxerSettings(
      * entities into its real inventory; {@code lockLoadout} restores the classic
      * per-tick kit re-stamp (a pure fixture whose gear never changes). The slot
      * indices tell the brain which hotbar slot holds each tool.
+     *
+     * <p>{@code unbreakableKit} stamps every kit piece Unbreakable so the boxer's
+     * gear never wears out. It DEFAULTS to {@code false} — a normal boxer's armor
+     * chips on hit and its weapon dulls on attack, exactly like a real player. A
+     * {@code lockLoadout} fixture is implicitly unbreakable regardless (its gear is
+     * re-stamped every tick anyway), and calibration fixtures set it explicitly so
+     * a boxer that spars forever never has its sword or armor break.</p>
      */
     public record Items(boolean autoPickup, boolean lockLoadout,
-            int weaponSlot, int rodSlot, int potSlot, int foodSlot, int blockSlot) {
+            int weaponSlot, int rodSlot, int potSlot, int foodSlot, int blockSlot,
+            boolean unbreakableKit, boolean fillSplashPots, int splashPotCount) {
 
-        public static final Items DEFAULT = new Items(false, false, 0, 1, 2, 3, 4);
+        public static final Items DEFAULT =
+                new Items(false, false, 0, 1, 2, 3, 4, false, false, 0);
 
         public Items {
             requireHotbar("weaponSlot", weaponSlot);
@@ -209,6 +233,10 @@ public record BoxerSettings(
             requireHotbar("potSlot", potSlot);
             requireHotbar("foodSlot", foodSlot);
             requireHotbar("blockSlot", blockSlot);
+            if (splashPotCount < 0 || splashPotCount > 9) {
+                throw new IllegalArgumentException(
+                        "splashPotCount must be a hotbar-sized count in [0,9]: " + splashPotCount);
+            }
         }
 
         private static void requireHotbar(String name, int slot) {

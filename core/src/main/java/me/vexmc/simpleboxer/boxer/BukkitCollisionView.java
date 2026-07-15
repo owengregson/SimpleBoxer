@@ -4,11 +4,13 @@ import java.util.ArrayList;
 import java.util.List;
 import me.vexmc.simpleboxer.common.physics.Box;
 import me.vexmc.simpleboxer.common.physics.CollisionView;
+import me.vexmc.simpleboxer.common.physics.Vec3d;
 import org.bukkit.Material;
 import org.bukkit.World;
 import org.bukkit.block.Block;
 import org.bukkit.util.BoundingBox;
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 
 /**
  * The live world as the client emulator collides with it. Owning-thread
@@ -63,6 +65,22 @@ final class BukkitCollisionView implements CollisionView {
     }
 
     @Override
+    public boolean isReadable(int blockX, int blockY, int blockZ) {
+        // Folia/region safety: only a cell whose chunk is loaded ON THIS region's
+        // thread may be read. World#isChunkLoaded is a cheap state query that never
+        // pulls a chunk in from another region — a chunk owned by another region (or
+        // simply not loaded) is not loaded from here, so it reads as false. That is the
+        // conservative direction the planner wants: unreadable = no edge = a wall, so
+        // the search stops at the loaded/region frontier instead of probing a block a
+        // cross-region getBlockAt would have to service. A cell outside the buildable
+        // Y column is likewise unreadable so a fall/head probe can't run off the world.
+        if (blockY < world.getMinHeight() || blockY >= world.getMaxHeight()) {
+            return false;
+        }
+        return world.isChunkLoaded(blockX >> 4, blockZ >> 4);
+    }
+
+    @Override
     public double slipperiness(int blockX, int blockY, int blockZ) {
         Material material = world.getBlockAt(blockX, blockY, blockZ).getType();
         return switch (material.name()) {
@@ -70,6 +88,19 @@ final class BukkitCollisionView implements CollisionView {
             case "BLUE_ICE" -> 0.989;
             case "SLIME_BLOCK" -> 0.8;
             default -> 0.6;
+        };
+    }
+
+    @Override
+    public @Nullable Vec3d stuckMultiplier(int blockX, int blockY, int blockZ) {
+        // Matched by material NAME (survives every version's Material set),
+        // mirroring the vanilla Entity.makeStuckInBlock stamps: a cobweb has
+        // no collision box, so the integrator only sees it through this.
+        Material material = world.getBlockAt(blockX, blockY, blockZ).getType();
+        return switch (material.name()) {
+            case "COBWEB", "WEB" -> new Vec3d(0.25, 0.05, 0.25);
+            case "SWEET_BERRY_BUSH" -> new Vec3d(0.8, 0.75, 0.8);
+            default -> null;
         };
     }
 

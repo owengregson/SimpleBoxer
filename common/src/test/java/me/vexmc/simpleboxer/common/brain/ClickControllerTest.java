@@ -49,7 +49,7 @@ class ClickControllerTest {
     }
 
     private static TargetState targetAt(double x, double y, double z, Vec3d vel) {
-        return new TargetState(x, y, z, y + 1.62, vel, 0.0, 0.0,
+        return new TargetState(x, y, z, y + 1.62, vel, 0.0, 0.0, 0.0,
                 Math.hypot(x, z), false);
     }
 

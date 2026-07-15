@@ -38,17 +38,29 @@ public final class MotorQuantizer {
     public static final double DEADBAND = 0.35;
 
     /**
-     * Lower the world-space heading onto held keys for the given aim yaw.
+     * Duty-cycle window for the softened forward key: when a heading asks for a
+     * pace below full ({@code speedScale < 1}), the forward key is held on
+     * {@code round(speedScale * DUTY_PERIOD)} of every {@code DUTY_PERIOD} ticks and
+     * released the rest, so the AVERAGE forward impulse tracks the requested pace
+     * while every individual key stays digital (a real player edging along a rim).
+     */
+    public static final int DUTY_PERIOD = 4;
+
+    /**
+     * Lower the world-space heading onto held keys for the given aim yaw. This
+     * overload runs at full pace (no duty-cycle); {@link #toInput(MoveHeading, float,
+     * boolean, Intent.JumpHint, boolean, int)} adds the ease-off.
      *
      * @param heading   collision-aware world direction (magnitude ignored; only
-     *                  its horizontal direction matters)
+     *                  its horizontal direction matters). {@link MoveHeading#nearLedge()}
+     *                  forces sneak — the intended edge ease-off
      * @param aimYawDeg the crosshair yaw the boxer is turned to this tick, in
      *                  degrees (vanilla convention: 0 faces +Z)
      * @param sprint    passed through untouched — a caller keeps sprint even on a
      *                  pure-strafe tick; we never fabricate a fractional forward
      *                  to "justify" it
      * @param jump      pressed iff {@link Intent.JumpHint#JUMP}
-     * @param sneak     passed through untouched
+     * @param sneak     pressed when passed, OR when the heading is near a ledge
      * @return a digital {@link MoveInput} with {@code forward, strafe ∈ {-1,0,1}}
      */
     public @NotNull MoveInput toInput(
@@ -58,10 +70,13 @@ public final class MotorQuantizer {
             @NotNull Intent.JumpHint jump,
             boolean sneak) {
         boolean wantJump = jump == Intent.JumpHint.JUMP;
+        // Near a ledge, ease off by crouching — the intended soft edge behaviour,
+        // not a hard avoid (a real player edges along a rim sneaking).
+        boolean wantSneak = sneak || heading.nearLedge();
 
         // No heading -> no movement keys (jump/sneak/sprint still honoured).
         if (heading.isStill()) {
-            return new MoveInput(0.0, 0.0, wantJump, sprint, sneak);
+            return new MoveInput(0.0, 0.0, wantJump, sprint, wantSneak);
         }
 
         // Direction only: strip magnitude so a slow (short) heading still keys
@@ -83,7 +98,42 @@ public final class MotorQuantizer {
         double forward = -dx * sin + dz * cos;
         double strafe = dx * cos + dz * sin;
 
-        return new MoveInput(quantize(forward), quantize(strafe), wantJump, sprint, sneak);
+        return new MoveInput(quantize(forward), quantize(strafe), wantJump, sprint, wantSneak);
+    }
+
+    /**
+     * As {@link #toInput(MoveHeading, float, boolean, Intent.JumpHint, boolean)} but
+     * consuming {@link MoveHeading#speedScale()}: on the "off" ticks of the duty-cycle
+     * the forward key is released (strafe/jump/sprint/sneak untouched), converting a
+     * sub-unit pace request into a digital ease-off rather than a fractional impulse.
+     *
+     * @param dutyTick a monotonic per-boxer decision-tick counter (the duty phase)
+     */
+    public @NotNull MoveInput toInput(
+            @NotNull MoveHeading heading,
+            float aimYawDeg,
+            boolean sprint,
+            @NotNull Intent.JumpHint jump,
+            boolean sneak,
+            int dutyTick) {
+        MoveInput base = toInput(heading, aimYawDeg, sprint, jump, sneak);
+        if (heading.speedScale() < 1.0 && !forwardHeldThisTick(heading.speedScale(), dutyTick)) {
+            return new MoveInput(0.0, base.strafe(), base.jump(), base.sprint(), base.sneak());
+        }
+        return base;
+    }
+
+    /** Whether the duty-cycle holds the forward key on {@code dutyTick} for this pace. */
+    private static boolean forwardHeldThisTick(double speedScale, int dutyTick) {
+        double s = Math.max(0.0, Math.min(1.0, speedScale));
+        int onTicks = (int) Math.round(s * DUTY_PERIOD);
+        if (onTicks >= DUTY_PERIOD) {
+            return true;
+        }
+        if (onTicks <= 0) {
+            return false;
+        }
+        return Math.floorMod(dutyTick, DUTY_PERIOD) < onTicks;
     }
 
     /** Sign of a component once it clears the deadband, else a released key. */

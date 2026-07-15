@@ -24,6 +24,20 @@ public final class EngageGoal implements Goal {
     public static final double BASE_UTILITY = 0.5;
     private static final double DEFAULT_ORBIT_RADIUS = 2.75;
 
+    /**
+     * How far outside the ring the boxer already circles while closing. Wider
+     * than the old {@code 1.5} so it sidesteps from ~5.75 blocks rather than only
+     * once inside ~4.25 — the approach itself is a strafe, not a straight rush.
+     */
+    private static final double ORBIT_ENGAGE_MARGIN = 3.0;
+
+    /**
+     * In-band forward pulse. Much smaller than the old {@code 0.6} so the ring
+     * heading stays strongly tangential (a real circle) instead of being diluted
+     * toward the target — sprint still re-arms on the pulse ticks.
+     */
+    private static final double ORBIT_INBAND_FORWARD = 0.35;
+
     private final Supplier<BoxerSettings> settings;
     private final AdaptiveStrafe strafe;
 
@@ -69,6 +83,11 @@ public final class EngageGoal implements Goal {
         }
         if (mem.wtapReleaseLeft > 0) {
             mem.wtapReleaseLeft--;
+            // Last release tick: forward re-presses (sprint re-arms) NEXT tick, when
+            // orbit resumes — flag it so adaptive strafing can land a juke on it.
+            if (mem.wtapReleaseLeft == 0) {
+                mem.wtapRepressed = true;
+            }
             return new Intent(Vec3d.ZERO, facing, Intent.ActionIntent.none(), false, Intent.JumpHint.NONE);
         }
 
@@ -89,7 +108,7 @@ public final class EngageGoal implements Goal {
             moveDir = orbit(p, s, toTarget, t.distance(), stop, mem);
         } else { // STRAFE_WEAVE
             AdaptiveStrafe.StrafeDecision weave =
-                    strafe.next(p, AdaptiveStrafe.StrafeMode.WEAVE, false, mem);
+                    strafe.next(p, AdaptiveStrafe.StrafeMode.WEAVE, AdaptiveStrafe.PARAMS_WEAVE, mem);
             moveDir = toTarget.add(tangent(toTarget, weave.sign()).scale(0.6)).horizontalNormalized();
         }
 
@@ -113,26 +132,37 @@ public final class EngageGoal implements Goal {
     private Vec3d orbit(Perception p, BoxerSettings s, Vec3d toTarget, double distance,
             double stop, BrainMemory mem) {
         double radius = Math.max(DEFAULT_ORBIT_RADIUS, stop);
-        // Approach phase: still far — just close the gap.
-        if (distance > radius + 1.5) {
+        // Approach phase: only far outside the (widened) ring do we rush straight.
+        if (distance > radius + ORBIT_ENGAGE_MARGIN) {
             return toTarget;
         }
         AdaptiveStrafe.StrafeDecision sd =
-                strafe.next(p, AdaptiveStrafe.StrafeMode.ORBIT, s.combat().adaptiveStrafe(), mem);
+                strafe.next(p, AdaptiveStrafe.StrafeMode.ORBIT, paramsFor(s.combat().strafePreset()), mem);
         Vec3d tangent = tangent(toTarget, sd.sign());
         double radiusError = distance - radius;
         double forwardBias;
         if (radiusError > 0.6) {
-            forwardBias = 1.0; // outside the ring: close in
+            forwardBias = 1.0; // outside the ring: close in (but already strafing)
         } else if (radiusError < -0.6) {
             forwardBias = -0.8; // inside the ring: back off
         } else {
-            // In the band: hold the ring, pulsing forward to keep sprint legal.
+            // In the band: hold the ring, pulsing a SMALL forward to keep sprint legal
+            // without diluting the tangential authority into a spiral.
             int[] cycle = mem.ints("engageOrbit", 1);
             cycle[0] = (cycle[0] + 1) % 5;
-            forwardBias = cycle[0] < 2 ? 0.6 : 0.0;
+            forwardBias = cycle[0] < 2 ? ORBIT_INBAND_FORWARD : 0.0;
         }
         return tangent.add(toTarget.scale(forwardBias)).horizontalNormalized();
+    }
+
+    /** Map the configured circle-strafe preset to its {@link AdaptiveStrafe} tuning. */
+    private static AdaptiveStrafe.StrafeParams paramsFor(BoxerSettings.Combat.StrafePreset preset) {
+        return switch (preset) {
+            case NONE -> AdaptiveStrafe.PARAMS_PLAIN;
+            case ORBIT -> AdaptiveStrafe.PARAMS_ORBIT;
+            case JUKE -> AdaptiveStrafe.PARAMS_JUKE;
+            case WTAP_SYNC -> AdaptiveStrafe.PARAMS_WTAP_SYNC;
+        };
     }
 
     /** Rotate a horizontal unit vector 90° about +Y: sign +1 = left (CCW), -1 = right. */
@@ -150,5 +180,10 @@ public final class EngageGoal implements Goal {
     @Override
     public double commitBonus() {
         return 0.05;
+    }
+
+    @Override
+    public boolean mayLeaveLedges() {
+        return true; // pursuit walks off edges toward the target, like a real client
     }
 }

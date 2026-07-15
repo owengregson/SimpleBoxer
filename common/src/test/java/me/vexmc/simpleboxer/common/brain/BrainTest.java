@@ -42,7 +42,7 @@ class BrainTest {
                 1.0, 1.0, Perception.UseItemState.NONE, false);
         Perception.TargetState tgt = new Perception.TargetState(
                 target.x(), target.y(), target.z(), target.y() + 1.62, Vec3d.ZERO,
-                bearingToMe, 0.0, distance, false);
+                bearingToMe, 0.0, 0.0, distance, false);
         return new Perception(self, tgt, Perception.TerrainView.OPEN,
                 Perception.InventoryView.EMPTY, Perception.CombatState.IDLE, 0);
     }

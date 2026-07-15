@@ -115,8 +115,12 @@ defaults:
     rod-knockback: false
     rod-min: 3.0
     rod-max: 6.0
-    # Choose strafe direction from how the opponent is aiming at the boxer.
-    adaptive-strafe: false
+    # Circle-strafe side selection (STRAFE_CIRCLE style only):
+    #   none      - a plain non-adaptive circle
+    #   orbit     - break a tight aim (strafe to the side their crosshair lags)
+    #   juke      - also juke opposite the opponent's motion to open the angle
+    #   wtap-sync - time jukes to the sprint re-press
+    strafe-preset: none
     # Straight-line s-tap combos (sprint reset, no A/D strafe).
     s-tap: false
     # Fraction of clicks intentionally aimed off-target (0-1).
@@ -136,12 +140,21 @@ defaults:
     auto-pickup: false
     # Re-stamp the fixed kit every tick (a pure fixture whose gear never changes).
     lock-loadout: false
+    # Stamp every kit piece Unbreakable. Off (the default) lets gear wear like a
+    # real player's — armor chips on hit, weapons dull on attack, and a broken
+    # piece empties its slot. A locked kit (lock-loadout) is always unbreakable.
+    unbreakable-kit: false
     # Which hotbar slot (0-8) holds each tool the brain reaches for.
     weapon-slot: 0
     rod-slot: 1
     pot-slot: 2
     food-slot: 3
     block-slot: 4
+    # Seed the hotbar with a FINITE supply of instant-health splash potions the
+    # boxer throws to heal (needs self-heal enabled). The supply depletes as it
+    # throws and can genuinely run out. splash-pot-count is how many (0-9).
+    fill-splash-pots: false
+    splash-pot-count: 0
 
 # Named presets selectable at spawn (/boxer spawn <name> <preset>) and via
 # /boxer set <name> preset <preset>. Each is a sparse overlay over

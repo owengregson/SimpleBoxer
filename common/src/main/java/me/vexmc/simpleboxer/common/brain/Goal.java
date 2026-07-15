@@ -50,4 +50,15 @@ public interface Goal {
     default boolean suppressesAttack() {
         return false;
     }
+
+    /**
+     * Whether a boxer driven by this goal may walk off ledges toward its heading.
+     * Pursuit/engage goals return {@code true} — chasing a target off an edge is
+     * exactly what a real client does. Survival goals (flee/heal/retreat) keep the
+     * default {@code false}: a fleeing boxer must not sprint off a cliff. Threaded
+     * into {@link ContextSteering#steer} to zero the ledge cost while pursuing.
+     */
+    default boolean mayLeaveLedges() {
+        return false;
+    }
 }

@@ -42,15 +42,21 @@ public record Perception(
 
     /**
      * The perceived (delayed) target. {@code bearingToMeYaw} is the yaw the
-     * target would need to face the boxer; {@code oppTrackRateDegPerTick} is how
-     * fast the target's actual aim is sweeping toward/around the boxer — the
-     * signal adaptive strafing reads to decide whether to break a tight track.
+     * target would need to face the boxer; {@code oppTrackRateDegPerTick} is the
+     * <em>unsigned</em> magnitude of how fast the target's actual aim is sweeping
+     * toward/around the boxer, and {@code signedTrackRateDegPerTick} is the same
+     * per-tick yaw delta <em>with its sign preserved</em> — positive when the
+     * target's crosshair is sweeping one way, negative the other. Adaptive
+     * strafing reads the signed rate to pick the side the opponent's aim is
+     * <em>not</em> covering (juke opposite their sweep), where the unsigned
+     * magnitude alone can only tell it that <em>some</em> track is happening.
      */
     public record TargetState(
             double x, double y, double z, double eyeY,
             @NotNull Vec3d velocity,
             double bearingToMeYaw,
             double oppTrackRateDegPerTick,
+            double signedTrackRateDegPerTick,
             double distance,
             boolean blocking) {
 

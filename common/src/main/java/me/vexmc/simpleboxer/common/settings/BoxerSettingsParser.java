@@ -111,11 +111,29 @@ public final class BoxerSettingsParser {
             rodMin = base.rodMin();
             rodMax = base.rodMax();
         }
-        boolean adaptiveStrafe = section.getBoolean("adaptive-strafe", base.adaptiveStrafe());
+        BoxerSettings.Combat.StrafePreset strafePreset = parseStrafePreset(
+                section.getString("strafe-preset"), base.strafePreset(), warnings);
         boolean sTap = section.getBoolean("s-tap", base.sTap());
         double missChance = doubleIn(section, "miss-chance", base.missChance(), 0.0, 1.0, warnings);
         return new BoxerSettings.Combat(blockHit, rodKnockback, rodMin, rodMax,
-                adaptiveStrafe, sTap, missChance);
+                strafePreset, sTap, missChance);
+    }
+
+    private static @NotNull BoxerSettings.Combat.StrafePreset parseStrafePreset(
+            @Nullable String name, @NotNull BoxerSettings.Combat.StrafePreset base,
+            @NotNull Consumer<String> warnings) {
+        if (name == null) {
+            return base;
+        }
+        try {
+            return BoxerSettings.Combat.StrafePreset.valueOf(
+                    name.toUpperCase(Locale.ROOT).replace('-', '_'));
+        } catch (IllegalArgumentException unknown) {
+            warnings.accept("combat.strafe-preset '" + name
+                    + "' is not none/orbit/juke/wtap-sync — keeping "
+                    + base.name().toLowerCase(Locale.ROOT).replace('_', '-'));
+            return base;
+        }
     }
 
     private static @NotNull BoxerSettings.SelfHeal parseSelfHeal(
@@ -150,7 +168,11 @@ public final class BoxerSettingsParser {
         int pot = intIn(section, "pot-slot", base.potSlot(), 0, 8, warnings);
         int food = intIn(section, "food-slot", base.foodSlot(), 0, 8, warnings);
         int block = intIn(section, "block-slot", base.blockSlot(), 0, 8, warnings);
-        return new BoxerSettings.Items(autoPickup, lockLoadout, weapon, rod, pot, food, block);
+        boolean unbreakableKit = section.getBoolean("unbreakable-kit", base.unbreakableKit());
+        boolean fillSplashPots = section.getBoolean("fill-splash-pots", base.fillSplashPots());
+        int splashPotCount = intIn(section, "splash-pot-count", base.splashPotCount(), 0, 9, warnings);
+        return new BoxerSettings.Items(autoPickup, lockLoadout, weapon, rod, pot, food, block,
+                unbreakableKit, fillSplashPots, splashPotCount);
     }
 
     private static @NotNull BoxerSettings.Hunger parseHunger(

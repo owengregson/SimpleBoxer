@@ -17,7 +17,7 @@ class BlockhitControllerTest {
         Perception.SelfState self = new Perception.SelfState(
                 0, 64, 0, Vec3d.ZERO, true, false, 1.0, 1.0, Perception.UseItemState.NONE, false);
         Perception.TargetState t = new Perception.TargetState(
-                2, 64, 0, 65.62, Vec3d.ZERO, 0, 0, 2.0, false);
+                2, 64, 0, 65.62, Vec3d.ZERO, 0, 0, 0, 2.0, false);
         Perception.InventoryView inv = new Perception.InventoryView(hasSword, false, false, false, false, 0);
         return new Perception(self, t, Perception.TerrainView.OPEN, inv, Perception.CombatState.IDLE, 0);
     }
