@@ -120,7 +120,7 @@ public final class Brain {
         applyFacing(p, intent.facing());
 
         // 2. Motor: make the desired world heading collision-smart, then quantize.
-        MoveHeading heading = resolveHeading(p, intent, world);
+        MoveHeading heading = resolveHeading(p, intent, world, decision.goal().mayLeaveLedges());
         JumpHint jump = proactiveJump.evaluate(p, heading, world, memory);
         if (intent.jump() == JumpHint.JUMP) {
             jump = JumpHint.JUMP;
@@ -180,7 +180,8 @@ public final class Brain {
      * anti-stuck detours and (if that keeps failing) a bounded path planner routes
      * around the obstacle toward the target.
      */
-    private MoveHeading resolveHeading(Perception p, Intent intent, CollisionView world) {
+    private MoveHeading resolveHeading(Perception p, Intent intent, CollisionView world,
+            boolean mayLeaveLedges) {
         Vec3d desired = intent.moveDirWorld();
         if (desired.horizontalDistanceSqr() < 1.0E-8) {
             memory.clearPath();
@@ -191,14 +192,14 @@ public final class Brain {
         // moment short-term progress resumes, or the boxer thrashes between routing
         // around the obstacle and steering straight back into it.
         if (memory.path != null) {
-            MoveHeading routed = followRoute(p, world);
+            MoveHeading routed = followRoute(p, world, mayLeaveLedges);
             if (routed != null) {
                 return routed;
             }
             memory.clearPath();
         }
 
-        MoveHeading heading = steering.steer(p, desired, world);
+        MoveHeading heading = steering.steer(p, desired, world, mayLeaveLedges);
 
         // Advance the stall counter every tick, but only ACT on it when the boxer
         // is genuinely trying to close on the target FROM A DISTANCE (an approach
@@ -211,7 +212,7 @@ public final class Brain {
             return heading;
         }
         if (antiStuck.shouldReroute(memory) && planRoute(p, world)) {
-            MoveHeading routed = followRoute(p, world);
+            MoveHeading routed = followRoute(p, world, mayLeaveLedges);
             if (routed != null) {
                 return routed;
             }
@@ -258,7 +259,7 @@ public final class Brain {
      * next. Returns {@code null} — signalling the caller to drop the route — when it
      * is exhausted or the target has wandered far from where the route was planned.
      */
-    private MoveHeading followRoute(Perception p, CollisionView world) {
+    private MoveHeading followRoute(Perception p, CollisionView world, boolean mayLeaveLedges) {
         if (memory.path == null || memory.pathCursor >= memory.path.size()) {
             return null;
         }
@@ -279,7 +280,7 @@ public final class Brain {
         if (toWaypoint.horizontalDistanceSqr() < 1.0E-8) {
             return null;
         }
-        return steering.steer(p, toWaypoint, world);
+        return steering.steer(p, toWaypoint, world, mayLeaveLedges);
     }
 
     private static long cell(double x, double z) {

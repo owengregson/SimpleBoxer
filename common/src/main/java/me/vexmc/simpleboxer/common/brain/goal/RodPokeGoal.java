@@ -166,4 +166,9 @@ public final class RodPokeGoal implements Goal {
     public boolean suppressesAttack() {
         return true; // no melee swing while holding/casting the rod
     }
+
+    @Override
+    public boolean mayLeaveLedges() {
+        return true; // closing to rod-poke range may cross an edge toward the target
+    }
 }

@@ -64,6 +64,11 @@ public final class ContextSteering {
      */
     public @NotNull MoveHeading steer(@NotNull Perception p, @NotNull Vec3d desiredDirWorld,
             @NotNull CollisionView world) {
+        return steer(p, desiredDirWorld, world, false);
+    }
+
+    public @NotNull MoveHeading steer(@NotNull Perception p, @NotNull Vec3d desiredDirWorld,
+            @NotNull CollisionView world, boolean mayLeaveLedges) {
         Vec3d desired = desiredDirWorld.horizontalNormalized();
         if (desired.lengthSqr() < 1.0E-8) {
             return MoveHeading.STILL; // no goal direction — hold position
@@ -71,9 +76,12 @@ public final class ContextSteering {
 
         Perception.SelfState self = p.self();
         Box box = NavGeometry.playerBox(self.x(), self.y(), self.z());
-        // A ledge is only dangerous in proportion to how fast we'd sail off it.
+        // A ledge is only dangerous in proportion to how fast we'd sail off it —
+        // unless this is a pursuit that MAY leave ledges (chasing a target off an
+        // edge like a real client), in which case the drop costs nothing.
         double speedFactor = Math.min(1.0, self.velocity().horizontalLength() / REFERENCE_SPEED);
-        double ledgeCost = LEDGE_PENALTY * (LEDGE_MIN_FACTOR + (1.0 - LEDGE_MIN_FACTOR) * speedFactor);
+        double ledgeCost = mayLeaveLedges ? 0.0
+                : LEDGE_PENALTY * (LEDGE_MIN_FACTOR + (1.0 - LEDGE_MIN_FACTOR) * speedFactor);
 
         Vec3d bestDir = desired;
         double bestScore = Double.NEGATIVE_INFINITY;
@@ -102,7 +110,9 @@ public final class ContextSteering {
             }
         }
 
-        boolean nearLedge = NavGeometry.ledgeAhead(world, box, bestDir,
+        // A pursuit that may leave ledges must not then crawl-sneak off the edge:
+        // suppress the near-ledge ease-off so it steps off at pace toward the target.
+        boolean nearLedge = !mayLeaveLedges && NavGeometry.ledgeAhead(world, box, bestDir,
                 NavGeometry.LOOK_AHEAD, LEDGE_MAX_DROP);
         // Ease off only when we're settling for a compromised heading — either
         // something still dangerous ahead, or no candidate makes real progress.

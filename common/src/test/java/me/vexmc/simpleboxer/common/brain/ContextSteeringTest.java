@@ -64,6 +64,30 @@ class ContextSteeringTest {
     }
 
     @Test
+    void pursuitWalksOffLedgeTowardTarget() {
+        // A raised platform (top y=64) covering x<=1, with a sheer drop to the East
+        // (a void beyond x=1). The target sits past the edge, so the goal wants East.
+        FakeWorld world = FakeWorld.empty().wall(-5, 63, -5, 0, 63, 5);
+        // Perched at the eastern rim, already pressing east at a sprint.
+        Perception p = perceptionAt(0.9, 64, 0.5, EAST.scale(0.3));
+
+        // A survival/default goal (mayLeaveLedges == false) refuses the edge: it
+        // deflects to pace the rim rather than stepping off toward the target.
+        MoveHeading paces = steering.steer(p, EAST, world, false);
+        assertTrue(paces.dirWorld().normalized().dot(EAST) < 0.99,
+                "a ledge-averse boxer should deflect off the rim, got dot="
+                        + paces.dirWorld().normalized().dot(EAST));
+
+        // A pursuing goal (mayLeaveLedges == true) walks straight off the edge
+        // toward the target, exactly like a real client chasing an opponent.
+        MoveHeading chases = steering.steer(p, EAST, world, true);
+        assertFalse(chases.isStill(), "pursuit should keep moving toward the target");
+        double dotEast = chases.dirWorld().normalized().dot(EAST);
+        assertTrue(dotEast > 0.99,
+                "pursuit should advance off the ledge toward the target, got dot=" + dotEast);
+    }
+
+    @Test
     void desiredZero_returnsStill() {
         FakeWorld world = FakeWorld.floorAt(64);
         Perception p = perceptionAt(0.5, 64, 0.5, Vec3d.ZERO);

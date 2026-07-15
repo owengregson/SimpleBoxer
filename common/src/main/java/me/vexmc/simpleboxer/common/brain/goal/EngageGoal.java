@@ -151,4 +151,9 @@ public final class EngageGoal implements Goal {
     public double commitBonus() {
         return 0.05;
     }
+
+    @Override
+    public boolean mayLeaveLedges() {
+        return true; // pursuit walks off edges toward the target, like a real client
+    }
 }
