@@ -34,6 +34,10 @@ public final class BrainMemory {
     /* W-tap / s-tap sprint-reset state machine. */
     public int wtapCountdown = -1;
     public int wtapReleaseLeft;
+    /* Set for the single tick the forward key re-presses after a w-tap release
+     * window (sprint about to re-arm) — the seam adaptive strafing syncs a juke
+     * to, so the direction change and the fresh sprint knock land together. */
+    public boolean wtapRepressed;
 
     /* Follow-up-over-terrain gate. */
     public int climbTicks;

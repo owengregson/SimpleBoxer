@@ -69,6 +69,11 @@ public final class EngageGoal implements Goal {
         }
         if (mem.wtapReleaseLeft > 0) {
             mem.wtapReleaseLeft--;
+            // Last release tick: forward re-presses (sprint re-arms) NEXT tick, when
+            // orbit resumes — flag it so adaptive strafing can land a juke on it.
+            if (mem.wtapReleaseLeft == 0) {
+                mem.wtapRepressed = true;
+            }
             return new Intent(Vec3d.ZERO, facing, Intent.ActionIntent.none(), false, Intent.JumpHint.NONE);
         }
 
