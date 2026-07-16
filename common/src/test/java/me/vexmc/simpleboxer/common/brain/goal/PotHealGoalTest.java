@@ -310,13 +310,17 @@ class PotHealGoalTest {
     }
 
     /**
-     * The heal weave: every juke tick is a unit heading with a constant 0.35
-     * away-drift component (heading·away = 0.35/√1.1225 = 0.33035), and the side
-     * holds walk the 2..5 tick cycle from a seed-drawn phase — every hold in
-     * [2,5], at least 3 distinct lengths, never one fixed metronome period.
+     * The heal weave inside the kite ring (4.5 ≤ 5.0 ≤ 7.5): every juke tick is
+     * a PURE unit tangent (heading·away = 0 — no radial creep), and the side
+     * holds walk the 2,3,4,5,5,4,3,2 palindrome from a seed-drawn phase — every
+     * hold in [2,5], at least 3 distinct lengths, never one fixed metronome
+     * period. Side balance: with sides flipping per hold, any 8 consecutive
+     * complete holds cover the whole palindrome, and each side's four holds sum
+     * to 2+4+5+3 = 3+5+4+2 = 14 ticks — the weave cannot drift laterally over
+     * its period, whatever the seed phase.
      */
     @Test
-    void weaveVariesItsHoldAndKeepsAwayDrift() {
+    void weaveOrbitsOnBalancedVariedHolds() {
         PotHealGoal goal = new PotHealGoal(() -> settings(true, false, 36));
         BrainMemory mem = new BrainMemory(5L);
 
@@ -329,11 +333,11 @@ class PotHealGoalTest {
                 launched++; // confirm every throw so the cycle keeps looping
             }
             if (phaseBefore == 2 || phaseBefore == 3) {
-                // healJuke ticks with awayDir = (-1,0,0): x = -0.33035 always;
-                // z = ∓1/1.0594810 = ∓0.94388 carries the weave side (never 0).
+                // healJuke ticks with awayDir = (-1,0,0) in-ring: x = 0 (no
+                // radial term); z = ∓1 carries the weave side (never 0).
                 assertEquals(1.0, intent.moveDirWorld().length(), 1.0E-9, "unit heading");
-                assertEquals(0.33035, intent.moveDirWorld().dot(new Vec3d(-1, 0, 0)), 1.0E-4,
-                        "constant away-drift under the weave");
+                assertEquals(0.0, intent.moveDirWorld().dot(new Vec3d(-1, 0, 0)), 1.0E-9,
+                        "no radial creep inside the kite ring");
                 jukeZ.add(intent.moveDirWorld().z());
             }
         }
@@ -355,5 +359,52 @@ class PotHealGoalTest {
                 "every hold in [2,5]: " + holds);
         assertTrue(holds.stream().distinct().count() >= 3,
                 "the hold length varies (never a metronome): " + holds);
+
+        // One full palindrome period, starting at a flip boundary: sides
+        // alternate per hold, so evens vs odds ARE the two sides.
+        int side0 = holds.get(0) + holds.get(2) + holds.get(4) + holds.get(6);
+        int side1 = holds.get(1) + holds.get(3) + holds.get(5) + holds.get(7);
+        assertEquals(14, side0, "one side's palindrome share: " + holds);
+        assertEquals(14, side1, "the other side's palindrome share: " + holds);
+    }
+
+    /**
+     * The kite ring bounds the retreat instead of a monotone march: below the
+     * 4.5 inner edge the weave still OPENS distance (heading·away =
+     * 0.35/√(1+0.35²) = +0.33035), between 4.5 and 7.5 it orbits (0), and
+     * beyond 7.5 it CLOSES back toward the target (−0.33035). Without the far
+     * band, back-to-back heal episodes (each re-trigger skips phase 0 once the
+     * gap is open) drifted the boxer off the tester arena to a fatal fall.
+     */
+    @Test
+    void kiteRingBandsTheRadialDrift() {
+        record Band(double distance, double expectedAwayDot) {}
+        List<Band> bands = List.of(
+                new Band(4.0, 0.33035),   // inside the inner edge: keep opening
+                new Band(5.0, 0.0),       // in the ring: pure orbit
+                new Band(8.0, -0.33035)); // past the outer edge: close back in
+
+        for (Band band : bands) {
+            PotHealGoal goal = new PotHealGoal(() -> settings(true, false, 36));
+            BrainMemory mem = new BrainMemory(6L);
+            int launched = 0;
+            int jukeTicks = 0;
+            // 60 ticks clears the phase-0 retreat cap (40) even pinned close.
+            for (int tick = 0; tick < 60; tick++) {
+                int phaseBefore = mem.ints("potHeal", 7)[PHASE];
+                Intent intent = goal.decide(perc(0.1, true, band.distance(), launched), mem);
+                if (intent.action() instanceof Intent.ActionIntent.StartUse) {
+                    launched++;
+                }
+                if (phaseBefore == 2 || phaseBefore == 3) {
+                    jukeTicks++;
+                    assertEquals(1.0, intent.moveDirWorld().length(), 1.0E-9, "unit heading");
+                    assertEquals(band.expectedAwayDot(),
+                            intent.moveDirWorld().dot(new Vec3d(-1, 0, 0)), 1.0E-4,
+                            "radial drift at distance " + band.distance());
+                }
+            }
+            assertTrue(jukeTicks >= 10, "sampled enough weave ticks at " + band.distance());
+        }
     }
 }

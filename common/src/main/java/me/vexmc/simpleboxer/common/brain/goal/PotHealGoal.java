@@ -58,21 +58,36 @@ public final class PotHealGoal implements Goal {
     /** Ticks to weave in the splash cloud before re-evaluating. */
     private static final int WAIT_TICKS = 10;
     /**
-     * Shortest heal-juke hold (ticks) on one side; holds walk a
-     * {@link #JUKE_HOLD_SPAN}-length cycle (2,3,4,5) from a seed-drawn phase, so
-     * the weave never settles into a fixed metronome yet stays deterministic
-     * for a given boxer.
+     * Shortest heal-juke hold (ticks) on one side; holds walk a side-balanced
+     * palindrome over {@link #JUKE_HOLD_SPAN} lengths (2,3,4,5,5,4,3,2) from a
+     * seed-drawn phase, so the weave never settles into a fixed metronome yet
+     * stays deterministic for a given boxer (see {@code healJuke}).
      */
     private static final int JUKE_MIN_HOLD = 2;
     /** How many distinct hold lengths the juke cycles through. */
     private static final int JUKE_HOLD_SPAN = 4;
     /**
-     * Away-drift blended under the lateral weave (fraction of the tangent): the
-     * boxer keeps opening distance while it pots instead of oscillating on a
-     * fixed line, and each pot is thrown at its CURRENT feet, so the splash
-     * still lands on it.
+     * Radial drift blended under the lateral weave (fraction of the tangent),
+     * signed by the kite ring below: opening while too close, closing while too
+     * far. Each pot is thrown at the boxer's CURRENT feet, so the splash still
+     * lands on it wherever the drift has carried it.
      */
     private static final double JUKE_DRIFT = 0.35;
+    /**
+     * Inner edge of the heal-kite ring: below it the weave keeps opening
+     * distance (the same gap the phase-0 retreat sprints for).
+     */
+    private static final double KITE_NEAR = RETREAT_DISTANCE;
+    /**
+     * Outer edge of the heal-kite ring: beyond it the drift REVERSES toward the
+     * target. Back-to-back episodes skip the phase-0 gate once the gap is open,
+     * so an unconditional away-drift would compound episode over episode and
+     * march a repeatedly-hurt healer monotonically off any finite arena — a
+     * fatal ledge fall mid-heal (the tester's pot-budget case pins this on a
+     * floating pad). A real player kites a bounded circle around the threat;
+     * so does this ring.
+     */
+    private static final double KITE_FAR = RETREAT_DISTANCE + 3.0;
     /**
      * How far ahead of the feet (blocks, along the flee heading) the throw
      * aims. {@code Brain.applyFacing} computes pitch against the 1.62 eye
@@ -209,30 +224,46 @@ public final class PotHealGoal implements Goal {
     }
 
     /**
-     * A side-to-side weave (tangent to the flee direction) blended with a slow
-     * away-drift, for the throw/wait phases: the boxer keeps moving — fluid and
-     * hard to punish — while each side is held a varied 2–5 ticks so the weave
-     * never reads as a metronome. Deterministic: one {@code mem.rng} draw ever
-     * (the cycle phase), then a plain counter walk.
+     * A side-to-side weave (tangent to the flee direction) blended with a
+     * ring-banded radial drift, for the throw/wait phases: the boxer keeps
+     * moving — fluid and hard to punish — while each side is held a varied 2–5
+     * ticks so the weave never reads as a metronome. Deterministic: one
+     * {@code mem.rng} draw ever (the cycle phase), then a plain counter walk.
+     *
+     * <p>The holds walk the PALINDROME 2,3,4,5,5,4,3,2 — the shape matters: a
+     * plain forward walk of the even-length cycle hands one side {2,4} = 6 and
+     * the other {3,5} = 8 of every 14 ticks (sides flip per hold, and the even
+     * period pins each side to the same two lengths forever), a hidden constant
+     * lateral drift. The palindrome gives BOTH sides 14 of every 28 ticks at
+     * any seed phase, so the weave is drift-free over its period.</p>
      */
-    private static @NotNull Vec3d healJuke(@NotNull Vec3d awayDir, @NotNull BrainMemory mem) {
+    private static @NotNull Vec3d healJuke(@NotNull Vec3d awayDir, double distance,
+            @NotNull BrainMemory mem) {
         Vec3d flat = awayDir.horizontalNormalized();
         if (flat.lengthSqr() < 1.0E-8) {
             flat = new Vec3d(1.0, 0.0, 0.0);
         }
         // {ticksLeft, side, cycle}: the side flips when its hold expires, and the
-        // hold length walks the 2..5 cycle from a seed-drawn phase (cycle==0 means
+        // hold length walks the palindrome from a seed-drawn phase (cycle==0 means
         // "not seeded yet" — the stored value is 1-based).
         int[] w = mem.ints("potJuke", 3);
         if (w[0] <= 0) {
-            w[2] = w[2] == 0 ? 1 + mem.rng.nextInt(JUKE_HOLD_SPAN) : w[2] + 1;
-            w[0] = JUKE_MIN_HOLD + ((w[2] - 1) % JUKE_HOLD_SPAN);
+            w[2] = w[2] == 0 ? 1 + mem.rng.nextInt(2 * JUKE_HOLD_SPAN) : w[2] + 1;
+            int step = (w[2] - 1) % (2 * JUKE_HOLD_SPAN);
+            int offset = step < JUKE_HOLD_SPAN ? step : 2 * JUKE_HOLD_SPAN - 1 - step;
+            w[0] = JUKE_MIN_HOLD + offset;
             w[1] ^= 1;
         }
         w[0]--;
         Vec3d tangent = w[1] == 0 ? new Vec3d(-flat.z(), 0.0, flat.x())
                 : new Vec3d(flat.z(), 0.0, -flat.x());
-        return tangent.add(flat.scale(JUKE_DRIFT)).normalized();
+        // The kite ring: open below it, orbit inside it, close back above it.
+        double radial = distance < KITE_NEAR ? JUKE_DRIFT
+                : distance > KITE_FAR ? -JUKE_DRIFT : 0.0;
+        if (radial == 0.0) {
+            return tangent; // already unit length
+        }
+        return tangent.add(flat.scale(radial)).normalized();
     }
 
     @Override
@@ -304,7 +335,7 @@ public final class PotHealGoal implements Goal {
                 st[LAUNCH_BASE] = p.combat().potsLaunched();
                 st[WAIT_TIMER] = WAIT_TICKS;
                 st[PHASE] = 3;
-                return new Intent(healJuke(awayDir, mem), throwAim,
+                return new Intent(healJuke(awayDir, t.distance(), mem), throwAim,
                         Intent.ActionIntent.startUse(true), true, Intent.JumpHint.NONE);
 
             case 3: // weave through the splash while the launch confirms; when the
@@ -328,7 +359,7 @@ public final class PotHealGoal implements Goal {
                     boolean broken = st[FAIL_STREAK] >= THROW_FAIL_CAP;
                     st[PHASE] = (recovered || capped || broken) ? 4 : 1;
                 }
-                return new Intent(healJuke(awayDir, mem), throwAim,
+                return new Intent(healJuke(awayDir, t.distance(), mem), throwAim,
                         Intent.ActionIntent.none(), true, Intent.JumpHint.NONE);
 
             default: { // 4: swap the weapon back, then either finish or give up
