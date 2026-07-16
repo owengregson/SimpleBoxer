@@ -66,6 +66,11 @@ public final class BoxerManager implements BoxerService {
         this.tabConcealer = new TabConcealer(bridge, plugin.getLogger());
         this.eventBasedKnockback =
                 scheduling.autoTicksEntities() && KnockbackListener.eventAvailable();
+        // Debug-run forensics: name the anti-cheat gate behind any movement
+        // rejection (the CLIPPED_INTO_BLOCK path especially — it rejects
+        // silently). No-op unless -Dsimpleboxer.debug is set and the event
+        // class resolves on this version.
+        FailMoveForensics.register(plugin);
     }
 
     public @NotNull TabConcealer tabConcealer() {

@@ -182,6 +182,20 @@ move-validation, not unit-testable in `common`. Do **not** guess a fix.
 4. Add the keeper `ClientPhysicsTest` pin that the integrator itself falls off/along walls
    (the deleted battery, distilled to assertions).
 
+**Closing note (0.7.0):** Plan step 3's first option (suppress/ignore self-inflicted
+corrections) was shipped as 0.6.1/0.6.2, judged a player-identity violation (it acked
+teleports it refused to adopt and force-wrote the server body with raw `Entity.setPos`), and
+removed. The true boundary cause was geometric: the sim built its box from `0.6 / 2.0` in
+double arithmetic while the server rebuilds every claim's AABB with the float-promoted
+`EntityDimensions.makeBoundingBox` extents (half-width `0.30000001192092896`), so a flush
+wall rest penetrated by ~1.19e-8 server-side — inside the `(0, 1e-7]` band that Paper
+1.21.11+/26.x's strict full-cube collect rejects silently (`CLIPPED_INTO_BLOCK`; the
+"moved-wrongly" framing above is disproven — the vertical error is unconditionally zeroed
+before that check). Fixed by float-promoted `PLAYER_WIDTH`/`PLAYER_HEIGHT`, Paper-parity
+sweep clamps (≤1e-7 negative back-out), and the vanilla atomic accept + PosRot-echo teleport
+confirm. The integrator-faithfulness evidence above still holds — the defect was the box
+CONSTANT, not the collision algorithm.
+
 ---
 
 # Workstream 2 — Baritone-quality pathfinding (server-side A*)

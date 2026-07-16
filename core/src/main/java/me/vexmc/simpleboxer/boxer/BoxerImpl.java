@@ -155,37 +155,6 @@ final class BoxerImpl implements Boxer {
     private int idleMoveTicks;
 
     /**
-     * Wall-glue recovery. A boxer that jumps/knocks into a wall lands its fall on a floor
-     * OUR collision finds correctly, but the server's {@code handleMovePlayer} anti-cheat
-     * can reject the wall-pressed descent as "moved wrongly" and snap the body back UP to
-     * the last-good apex every tick; {@link #route} then faithfully re-adopts that
-     * correction, so the boxer oscillates against the wall forever ("glued"). The sim
-     * already KNOWS where the floor is — only the server body is stuck — so when we detect
-     * the correction loop we stop re-adopting the bogus up-corrections and drive the body
-     * straight to the sim's own authoritative, floor-seeking position via a direct
-     * server-side {@code setPosition} (the same write reanchor/restore use), bypassing the
-     * anti-cheat that was fighting the fall. Recovery ends the instant the sim is grounded.
-     */
-    private int glueRecoverTicks;
-    private int glueCorrectionStreak;
-    private double glueLastCorrectionY;
-    /** Ticks since the last up-snap correction — recovery only ends once this shows the
-     *  server has stopped rejecting us (the correction stream, and its ack tail, drained). */
-    private int glueQuietTicks;
-    /** Consecutive up-snap corrections that mark the loop (vs. a one-off resync). */
-    private static final int GLUE_CORRECTION_STREAK = 3;
-    /** Safety cap on a recovery window; it normally ends far sooner, on convergence. */
-    private static final int GLUE_RECOVER_TICKS = 30;
-    /** Corrections must stay silent this long (covers the RTT ack tail) before we un-arm. */
-    private static final int GLUE_QUIET_TICKS = 5;
-    /** A correction farther than this is a real teleport/respawn, not a glue up-snap. */
-    private static final double GLUE_MAX_SNAP = 2.0;
-    /** Minimum upward snap for a correction to read as a denied descent (vs. float noise). */
-    private static final double GLUE_UP_SNAP = 0.03;
-    /** How close successive up-snap targets must sit to count as the same hang. */
-    private static final double GLUE_SAME_LEVEL = 0.1;
-
-    /**
      * Where our packets last left the boxer's server position. On a server that
      * entity-ticks the boxer for us, the region's own doTick travels the body by
      * gravity/knockback between our ticks; we re-anchor to this each tick so the
@@ -323,7 +292,7 @@ final class BoxerImpl implements Boxer {
         // Keep the pot slot loaded from the finite splash-pot reserve so the heal
         // routine can throw again next cycle — until the whole supply runs out.
         restockPotSlot();
-        if (serverTicksEntity && hasAnchor && glueRecoverTicks == 0) {
+        if (serverTicksEntity && hasAnchor) {
             reanchorServerPosition();
         }
         long now = System.nanoTime();
@@ -382,30 +351,6 @@ final class BoxerImpl implements Boxer {
         physics.step(input, aimYaw, collisionView);
         pushAwayFromNeighbors();
 
-        // Glue recovery (armed by route() on a "moved-wrongly" correction loop): while it
-        // runs, the bogus up-corrections are ignored, reanchor/restore are suspended, and
-        // step 6 force-writes the body onto the sim, dragging it down to the floor the sim
-        // already found. It ends once the two have CONVERGED — the sim is grounded AND the
-        // body has caught up to it (not merely "sim grounded": the sim is grounded on half
-        // the glued ticks already, and clearing then would strand the body up the wall
-        // before the force-write could pull it down).
-        if (glueRecoverTicks > 0) {
-            glueRecoverTicks--;
-            glueQuietTicks++;
-            double serverY = spawned.player().getLocation().getY();
-            // Converge only when all three hold: the sim is grounded, the body has caught
-            // up to it, AND the server has gone quiet — no fresh up-snap for GLUE_QUIET_TICKS,
-            // i.e. our floor report was accepted and the correction/ack tail has drained. If
-            // the server never accepts (a real surface at the apex — not this bug), the
-            // GLUE_RECOVER_TICKS cap is the backstop.
-            if (physics.onGround()
-                    && Math.abs(serverY - physics.y()) < GLUE_SAME_LEVEL
-                    && glueQuietTicks >= GLUE_QUIET_TICKS) {
-                glueRecoverTicks = 0;
-                glueCorrectionStreak = 0;
-            }
-        }
-
         // Matrix forensics: trace the sim vs server-entity Y whenever the boxer is
         // wall-collided — the diff exposes any sim<->server divergence on contact
         // (e.g. a "stuck on the wall" report). Behind -Dsimpleboxer.debug.
@@ -413,10 +358,10 @@ final class BoxerImpl implements Boxer {
             Location serverLoc = spawned.player().getLocation();
             logger.info(String.format(
                     "[debug %s] wallCollide sim=(%.3f,%.3f,%.3f) vy=%.4f onGround=%b | "
-                            + "server=(%.3f,%.3f,%.3f) srvGround=%b recover=%d",
+                            + "server=(%.3f,%.3f,%.3f) srvGround=%b",
                     name, physics.x(), physics.y(), physics.z(), physics.velocity().y(),
                     physics.onGround(), serverLoc.getX(), serverLoc.getY(), serverLoc.getZ(),
-                    spawned.player().isOnGround(), glueRecoverTicks));
+                    spawned.player().isOnGround()));
         }
 
         // 3. Report movement the way a real client does.
@@ -439,26 +384,8 @@ final class BoxerImpl implements Boxer {
             }
         }
 
-        // 6. Tick the ServerPlayer where the server will not do it itself — or, while
-        //    recovering from wall glue, FORCE the body onto the sim's authoritative,
-        //    floor-seeking position (bypassing the anti-cheat that was rejecting the
-        //    descent) so the frozen body follows the sim down to the ground the sim
-        //    already found. This suspends both reanchor and the doTick restore: the sim
-        //    is the sole authority until it lands and recovery clears.
-        if (glueRecoverTicks > 0) {
-            try {
-                bridge.setPosition(spawned.serverPlayer(),
-                        physics.x(), physics.y(), physics.z());
-            } catch (ReflectiveOperationException failure) {
-                logger.warning("[" + name + "] glue-recovery reposition failed: " + failure);
-            }
-            if (serverTicksEntity) {
-                anchorX = physics.x();
-                anchorY = physics.y();
-                anchorZ = physics.z();
-                hasAnchor = true;
-            }
-        } else if (serverTicksEntity) {
+        // 6. Tick the ServerPlayer where the server will not do it itself.
+        if (serverTicksEntity) {
             Location anchor = spawned.player().getLocation();
             anchorX = anchor.getX();
             anchorY = anchor.getY();
@@ -481,8 +408,12 @@ final class BoxerImpl implements Boxer {
     }
 
     /**
-     * A dead-and-waiting boxer's minimal tick: answer keep-alives and teleport
-     * acks so the connection survives, and perform the respawn when requested.
+     * A dead-and-waiting boxer's minimal tick: answer keep-alives, adopt +
+     * confirm teleports, and perform the respawn when requested. Teleports go
+     * through the same {@link #adoptPositionSync} path as live ticks — a vanilla
+     * client's position handler runs while dead too, and an ack without adoption
+     * rebases the server's anti-cheat baseline to a position the sim never took
+     * (this was the emulator's last ack-without-adopt site).
      */
     private void keepaliveOnly(long now, long oneWay) {
         for (CapturedPacket captured : outbound.drain(now, oneWay)) {
@@ -490,7 +421,7 @@ final class BoxerImpl implements Boxer {
                 if (inbound instanceof Inbound.KeepAlive keepAlive) {
                     actions.offer(new Action.KeepAlive(keepAlive.id()), now);
                 } else if (inbound instanceof Inbound.PositionSync sync) {
-                    actions.offer(new Action.AcceptTeleport(sync.teleportId()), now);
+                    adoptPositionSync(sync, now);
                 }
             }
         }
@@ -514,6 +445,16 @@ final class BoxerImpl implements Boxer {
      * position back to where our packets last left it — unless it has moved
      * farther than a teleport threshold, which means the server itself
      * repositioned the boxer (a teleport or respawn) and we adopt that instead.
+     *
+     * <p>{@code bridge.setPosition} is a raw {@code Entity.setPos}: it never
+     * touches the game listener's anti-cheat baseline ({@code lastGoodX/Y/Z}) or
+     * a pending {@code awaitingPositionFromClient}, so it is legal ONLY for
+     * writes that restore the last packet-accepted position — this reanchor (the
+     * anchor is the end-of-tick location, i.e. post-dispatch = last accepted)
+     * and the non-Folia doTick restore in {@link #tick}. Never write sim-derived
+     * coordinates through it and never write while a teleport is unconfirmed;
+     * any other reposition must go through the listener's own teleport path,
+     * which mints a teleport id and enters the confirm protocol.</p>
      */
     private void reanchorServerPosition() {
         Location current = spawned.player().getLocation();
@@ -607,80 +548,87 @@ final class BoxerImpl implements Boxer {
             return;
         }
         if (inbound instanceof Inbound.PositionSync sync) {
-            double x = sync.relativeX() ? physics.x() + sync.x() : sync.x();
-            double y = sync.relativeY() ? physics.y() + sync.y() : sync.y();
-            double z = sync.relativeZ() ? physics.z() + sync.z() : sync.z();
-
-            // Wall-glue signature: a small ABSOLUTE-Y correction snapping the boxer UP
-            // while it is pressed against a wall — the server denying a wall-pressed
-            // descent. A run of these to ~the same height IS the "moved-wrongly" loop.
-            // Arm recovery on the streak; once armed, IGNORE the up-snaps entirely
-            // (re-adopting each one is exactly what pinned the boxer to the wall) — the
-            // sim keeps falling to the floor it already found while step 6 drags the body
-            // down after it. A real teleport (large, or downward, or off the wall) fails
-            // the signature, resets the streak, and is adopted normally.
-            double dx = x - physics.x();
-            double dy = y - physics.y();
-            double dz = z - physics.z();
-            double distSq = dx * dx + dy * dy + dz * dz;
-            boolean glueUpSnap = !sync.relativeY()
-                    && physics.horizontalCollision()
-                    && dy > GLUE_UP_SNAP
-                    && distSq < GLUE_MAX_SNAP * GLUE_MAX_SNAP;
-            if (glueUpSnap) {
-                glueCorrectionStreak = Math.abs(y - glueLastCorrectionY) < GLUE_SAME_LEVEL
-                        ? glueCorrectionStreak + 1 : 1;
-                glueLastCorrectionY = y;
-                glueQuietTicks = 0; // a fresh rejection — the server has NOT accepted us yet
-                if (glueCorrectionStreak >= GLUE_CORRECTION_STREAK) {
-                    glueRecoverTicks = GLUE_RECOVER_TICKS;
-                }
-            } else {
-                glueCorrectionStreak = 0;
-                // A genuine reposition (teleport / respawn) supersedes recovery in flight;
-                // a mere momentary loss of wall contact does not.
-                if (distSq > GLUE_MAX_SNAP * GLUE_MAX_SNAP) {
-                    glueRecoverTicks = 0;
-                }
-            }
-            boolean ignore = glueRecoverTicks > 0 && glueUpSnap;
-
-            // Matrix forensics: log every server position-correction the boxer sees
-            // (teleport / "moved wrongly" resync) — behind -Dsimpleboxer.debug.
-            if (DEBUG) {
-                logger.info(String.format(
-                        "[debug %s] POSITION-CORRECTION sim=(%.3f,%.3f,%.3f) -> (%.3f,%.3f,%.3f) "
-                                + "relY=%b hColl=%b ignore=%b streak=%d",
-                        name, physics.x(), physics.y(), physics.z(), x, y, z,
-                        sync.relativeY(), physics.horizontalCollision(),
-                        ignore, glueCorrectionStreak));
-            }
-
-            // Adopt the position/velocity unless we are shedding a glue up-snap; the
-            // teleport ack and rotation are adopted either way so the wire stays in sync.
-            if (!ignore) {
-                var velocity = physics.velocity();
-                physics.teleport(x, y, z);
-                if (sync.velocity() != null) {
-                    Inbound.PositionSync.Motion motion = sync.velocity();
-                    physics.applyVelocity(
-                            motion.deltaX() ? velocity.x() + motion.x() : motion.x(),
-                            motion.deltaY() ? velocity.y() + motion.y() : motion.y(),
-                            motion.deltaZ() ? velocity.z() + motion.z() : motion.z());
-                } else {
-                    physics.applyVelocity(
-                            sync.relativeX() ? velocity.x() : 0.0,
-                            sync.relativeY() ? velocity.y() : 0.0,
-                            sync.relativeZ() ? velocity.z() : 0.0);
-                }
-            }
-            float yaw = sync.relativeYaw() ? aimYaw + sync.yaw() : sync.yaw();
-            float pitch = sync.relativePitch() ? aimPitch + sync.pitch() : sync.pitch();
-            brain.snapAim(yaw, pitch);
-            aimYaw = yaw;
-            aimPitch = pitch;
-            actions.offer(new Action.AcceptTeleport(sync.teleportId()), now);
+            adoptPositionSync(sync, now);
         }
+    }
+
+    /**
+     * The vanilla client's {@code ClientboundPlayerPositionPacket} handler
+     * ({@code ClientPacketListener.handleMovePlayerPacket}), reproduced
+     * atomically: decode the relative flags, adopt position + rotation +
+     * velocity UNCONDITIONALLY, then queue — at the same timestamp, in this
+     * wire order — {@code ServerboundAcceptTeleportationPacket(id)} and a
+     * {@code MovePlayer.PosRot} echo of the EXACT adopted position with
+     * {@code onGround=false}. The FIFO action line preserves the order and adds
+     * the one-way latency, exactly like a real client at that ping.
+     *
+     * <p>The echo is the protocol half the emulator historically lacked: on the
+     * ack the server {@code absSnapTo}s the body to the awaited position and
+     * rebases its anti-cheat baseline ({@code lastGoodX/Y/Z}) there, so the
+     * delta-zero echo is unconditionally accepted and every correction round
+     * re-baselines cleanly — instead of exposing a fresh, independently
+     * simulated physics tick to the replay check. Adoption must be
+     * unconditional: an ack without adoption rebases the server to a position
+     * the sim refused, a state no vanilla client+server pair can produce.
+     * Exactly ONE ack ships per PositionSync (a matching-id ack while the
+     * server awaits none is a kick, "invalid_player_movement"); 1.17.1-era
+     * servers resend an unconfirmed teleport with a NEW id every ~20 ticks and
+     * each resend arrives here as a fresh sync. Vanilla suppresses the echo
+     * only while riding a vehicle — boxers never ride; revisit before any
+     * vehicle feature.</p>
+     *
+     * <p>Velocity semantics per era, both vanilla-verified: legacy packets zero
+     * the velocity of absolute axes; 1.21.2+ {@code PositionMoveRotation}
+     * applies add-vs-replace per DELTA flag. {@code lastSent*} moves to the
+     * adopted values so {@link #queueMovement} diffs the next natural move
+     * against the confirmed baseline rather than re-sending or starving it.</p>
+     */
+    private void adoptPositionSync(@NotNull Inbound.PositionSync sync, long now) {
+        double x = sync.relativeX() ? physics.x() + sync.x() : sync.x();
+        double y = sync.relativeY() ? physics.y() + sync.y() : sync.y();
+        double z = sync.relativeZ() ? physics.z() + sync.z() : sync.z();
+
+        // Matrix forensics: log every server position-correction the boxer sees
+        // (teleport / anti-cheat resync) — behind -Dsimpleboxer.debug.
+        if (DEBUG) {
+            logger.info(String.format(
+                    "[debug %s] POSITION-CORRECTION sim=(%.3f,%.3f,%.3f) -> (%.3f,%.3f,%.3f) "
+                            + "relY=%b hColl=%b",
+                    name, physics.x(), physics.y(), physics.z(), x, y, z,
+                    sync.relativeY(), physics.horizontalCollision()));
+        }
+
+        var velocity = physics.velocity();
+        physics.teleport(x, y, z);
+        if (sync.velocity() != null) {
+            Inbound.PositionSync.Motion motion = sync.velocity();
+            physics.applyVelocity(
+                    motion.deltaX() ? velocity.x() + motion.x() : motion.x(),
+                    motion.deltaY() ? velocity.y() + motion.y() : motion.y(),
+                    motion.deltaZ() ? velocity.z() + motion.z() : motion.z());
+        } else {
+            physics.applyVelocity(
+                    sync.relativeX() ? velocity.x() : 0.0,
+                    sync.relativeY() ? velocity.y() : 0.0,
+                    sync.relativeZ() ? velocity.z() : 0.0);
+        }
+        float yaw = sync.relativeYaw() ? aimYaw + sync.yaw() : sync.yaw();
+        float pitch = sync.relativePitch() ? aimPitch + sync.pitch() : sync.pitch();
+        brain.snapAim(yaw, pitch);
+        aimYaw = yaw;
+        aimPitch = pitch;
+        actions.offer(new Action.AcceptTeleport(sync.teleportId()), now);
+        // Vanilla's atomic answer: the ack, then a PosRot echo of the exact
+        // adopted position with onGround=false (and no collision stamp — the
+        // handler-built echo carries none), bypassing queueMovement's send
+        // thresholds so the re-baseline move always ships.
+        actions.offer(new Action.Move(x, y, z, yaw, pitch, false, false, true, true), now);
+        lastSentX = x;
+        lastSentY = y;
+        lastSentZ = z;
+        lastSentYaw = yaw;
+        lastSentPitch = pitch;
+        idleMoveTicks = 0;
     }
 
     /* ------------------------------------------------------------------ */
