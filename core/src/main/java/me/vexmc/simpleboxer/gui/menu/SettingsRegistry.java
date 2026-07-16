@@ -23,23 +23,22 @@ import org.jetbrains.annotations.NotNull;
  * here maps one {@link BoxerSettings} field to a {@link SettingCategory} tile
  * and its click behaviour; the GUI reads this list and lays screens out
  * automatically, so a future knob is added <em>here</em> and nowhere else —
- * never as a hand-placed slot.
+ * never as a hand-placed slot. The one deliberate exception is the hotbar
+ * role→slot assignment, which is a picture rather than five integers: it lives
+ * on {@link HotbarLayoutMenu}, reached from the Items page.
  *
  * <p>Every write goes through a {@code withX(...)} copy (or a rebuilt
  * sub-record), so the immutable settings and the pinned writer/parser
  * round-trip stay untouched. Cross-field bands (the rod range, the self-heal
  * band) are clamped inside their apply lambdas so a step can never build an
- * out-of-range record.</p>
+ * out-of-range record. Dependent knobs carry {@code requires(...)} so the
+ * renderer can dim them while their master toggle is off.</p>
  */
 final class SettingsRegistry {
 
     private static final List<SettingDescriptor> ALL = build();
 
     private SettingsRegistry() {}
-
-    static @NotNull List<SettingDescriptor> all() {
-        return ALL;
-    }
 
     static @NotNull List<SettingDescriptor> byCategory(@NotNull SettingCategory category) {
         List<SettingDescriptor> out = new ArrayList<>();
@@ -82,7 +81,7 @@ final class SettingsRegistry {
                 "§8How the crosshair chases the target.",
                 "§8locked / sharp / smooth / sloppy"));
 
-        /* ---- Combat ---------------------------------------------------- */
+        /* ---- Combat (absorbs the old W-tap page) ------------------------ */
         d.add(SettingDescriptor.toggle("block-hit", SettingCategory.COMBAT, "Block-hit",
                 Material.SHIELD, s -> s.combat().blockHit(),
                 s -> s.withCombat(combat(s).blockHit(!s.combat().blockHit())),
@@ -97,16 +96,14 @@ final class SettingsRegistry {
                 Material.TRIPWIRE_HOOK, "", s -> s.combat().rodMin(), 0.1, 0.5, 0.5, 6.0,
                 (s, v) -> s.withCombat(combat(s).rodMin(Math.min(v, s.combat().rodMax()))),
                 "§8Nearest range the boxer will rod-poke from.",
-                "§8(Kept at or below rod max.)"));
+                "§8(Kept at or below rod max.)")
+                .requires("Rod knockback", s -> s.combat().rodKnockback()));
         d.add(SettingDescriptor.number("rod-max", SettingCategory.COMBAT, "Rod max range",
                 Material.LEAD, "", s -> s.combat().rodMax(), 0.1, 0.5, 0.5, 6.0,
                 (s, v) -> s.withCombat(combat(s).rodMax(Math.max(v, s.combat().rodMin()))),
                 "§8Farthest range the boxer will rod-poke from.",
-                "§8(Kept at or above rod min.)"));
-        d.add(SettingDescriptor.cycle("strafe-preset", SettingCategory.COMBAT, "Strafe preset",
-                Material.COMPASS, "custom", strafePresetOptions(),
-                "§8How the circle-strafe picks its side.",
-                "§8none / orbit / juke / wtap-sync"));
+                "§8(Kept at or above rod min.)")
+                .requires("Rod knockback", s -> s.combat().rodKnockback()));
         d.add(SettingDescriptor.toggle("s-tap", SettingCategory.COMBAT, "S-tap",
                 Material.SUGAR, s -> s.combat().sTap(),
                 s -> s.withCombat(combat(s).sTap(!s.combat().sTap())),
@@ -116,12 +113,34 @@ final class SettingsRegistry {
                 Material.GUNPOWDER, "", s -> s.combat().missChance(), 0.05, 0.1, 0.0, 1.0,
                 (s, v) -> s.withCombat(combat(s).missChance(v)),
                 "§8Fraction of clicks aimed intentionally off (0-1)."));
+        d.add(SettingDescriptor.toggle("wtap", SettingCategory.COMBAT, "W-tap",
+                Material.FEATHER, s -> s.wtap().enabled(),
+                s -> s.withWtap(new WTap(!s.wtap().enabled(),
+                        s.wtap().delayTicks(), s.wtap().releaseTicks())),
+                "§8Release+re-press forward after a hit to",
+                "§8re-arm sprint knockback."));
+        d.add(SettingDescriptor.integer("wtap-delay", SettingCategory.COMBAT, "W-tap delay",
+                Material.REPEATER, "t", s -> s.wtap().delayTicks(), 1, 5, 0, 20,
+                (s, v) -> s.withWtap(new WTap(s.wtap().enabled(),
+                        (int) Math.round(v), s.wtap().releaseTicks())),
+                "§8Ticks after a hit before forward releases (0-20).")
+                .requires("W-tap", s -> s.wtap().enabled()));
+        d.add(SettingDescriptor.integer("wtap-release", SettingCategory.COMBAT, "W-tap release",
+                Material.REDSTONE, "t", s -> s.wtap().releaseTicks(), 1, 5, 1, 20,
+                (s, v) -> s.withWtap(new WTap(s.wtap().enabled(),
+                        s.wtap().delayTicks(), (int) Math.round(v))),
+                "§8Ticks forward stays released (1-20).")
+                .requires("W-tap", s -> s.wtap().enabled()));
 
-        /* ---- Movement -------------------------------------------------- */
+        /* ---- Movement (gains strafe-preset: both strafe knobs, one page) - */
         d.add(SettingDescriptor.cycle("movement-style", SettingCategory.MOVEMENT, "Movement",
                 Material.LEATHER_BOOTS, "custom", movementOptions(),
                 "§8How the boxer closes distance.",
                 "§8rush / strafe-circle / strafe-weave / stand"));
+        d.add(SettingDescriptor.cycle("strafe-preset", SettingCategory.MOVEMENT, "Strafe preset",
+                Material.COMPASS, "custom", strafePresetOptions(),
+                "§8How the circle-strafe picks its side.",
+                "§8none / orbit / juke / wtap-sync"));
         d.add(SettingDescriptor.number("stop-distance", SettingCategory.MOVEMENT, "Stop distance",
                 Material.TARGET, "", s -> s.movement().stopDistance(), 0.5, 1.0, 0.0, 6.0,
                 (s, v) -> s.withMovement(new Movement(s.movement().style(), v, s.movement().sprint())),
@@ -133,7 +152,45 @@ final class SettingsRegistry {
                 "§8Hold sprint whenever forward is down.",
                 "§8(Speed/Slowness still apply on top.)"));
 
-        /* ---- Survival -------------------------------------------------- */
+        /* ---- Potions & healing (the split heal/pot knobs, one page) ----- */
+        d.add(SettingDescriptor.toggle("self-heal", SettingCategory.POTIONS, "Self-heal",
+                Material.SPLASH_POTION, s -> s.selfHeal().enabled(),
+                s -> s.withSelfHeal(selfHeal(s).enabled(!s.selfHeal().enabled())),
+                "§8Retreat and splash instant-health when low,",
+                "§8then re-engage (mortal boxers only)."));
+        d.add(SettingDescriptor.number("heal-trigger", SettingCategory.POTIONS, "Heal trigger HP",
+                Material.REDSTONE, "hp", s -> s.selfHeal().triggerHealth(), 1.0, 2.0, 0.0, 20.0,
+                (s, v) -> s.withSelfHeal(selfHeal(s)
+                        .triggerHealth(Math.min(v, s.selfHeal().resumeHealth()))),
+                "§8Health that makes the boxer disengage (0-20).",
+                "§8(Kept at or below the resume health.)")
+                .requires("Self-heal", s -> s.selfHeal().enabled()));
+        d.add(SettingDescriptor.number("heal-resume", SettingCategory.POTIONS, "Heal resume HP",
+                Material.GLOWSTONE_DUST, "hp", s -> s.selfHeal().resumeHealth(), 1.0, 2.0, 0.0, 20.0,
+                (s, v) -> s.withSelfHeal(selfHeal(s)
+                        .resumeHealth(Math.max(v, s.selfHeal().triggerHealth()))),
+                "§8Health it heals back to before re-engaging.",
+                "§8(Kept at or above the trigger health.)")
+                .requires("Self-heal", s -> s.selfHeal().enabled()));
+        d.add(SettingDescriptor.integer("splash-cap", SettingCategory.POTIONS, "Splash cap",
+                Material.BREWING_STAND, "", s -> s.selfHeal().splashCap(), 1, 6, 0, 36,
+                (s, v) -> s.withSelfHeal(selfHeal(s).splashCap((int) Math.round(v))),
+                "§8Most pots spent on one heal (0-36).")
+                .requires("Self-heal", s -> s.selfHeal().enabled()));
+        d.add(SettingDescriptor.toggle("fill-splash-pots", SettingCategory.POTIONS, "Fill splash pots",
+                Material.SPLASH_POTION, s -> s.items().fillSplashPots(),
+                s -> s.withItems(items(s).fillSplashPots(!s.items().fillSplashPots())),
+                "§8Seed the hotbar with a finite supply of",
+                "§8instant-health splash potions the boxer",
+                "§8throws to heal — and can run out of."));
+        d.add(SettingDescriptor.integer("splash-pot-count", SettingCategory.POTIONS, "Splash pot count",
+                Material.BREWING_STAND, "", s -> s.items().splashPotCount(), 1, 3, 0, 9,
+                (s, v) -> s.withItems(items(s).splashPotCount((int) Math.round(v))),
+                "§8How many splash potions to seed (0-9),",
+                "§8when Fill splash pots is on.")
+                .requires("Fill splash pots", s -> s.items().fillSplashPots()));
+
+        /* ---- Survival ---------------------------------------------------- */
         d.add(SettingDescriptor.toggle("invincible", SettingCategory.SURVIVAL, "Invincible",
                 Material.TOTEM_OF_UNDYING, s -> s.invincible(),
                 s -> s.withInvincible(!s.invincible()),
@@ -152,43 +209,19 @@ final class SettingsRegistry {
                 Material.SKELETON_SKULL, "custom", deathModeOptions(),
                 "§8manual: stay down until respawned.",
                 "§8auto-respawn: pop back up in place."));
-        d.add(SettingDescriptor.toggle("feed-hunger", SettingCategory.SURVIVAL, "Feed hunger",
-                Material.COOKED_BEEF, s -> s.feedHunger(),
-                s -> s.withFeedHunger(!s.feedHunger()),
-                "§8Pin hunger full so sprint stays legal."));
-        d.add(SettingDescriptor.toggle("hunger-natural", SettingCategory.SURVIVAL, "Natural hunger",
-                Material.WHEAT, s -> s.hunger().natural(),
-                s -> s.withHunger(new Hunger(!s.hunger().natural(), s.hunger().eatThreshold())),
-                "§8Let vanilla exhaustion drain food; the boxer",
-                "§8eats when it drops to the threshold below."));
+        d.add(SettingDescriptor.cycle("hunger", SettingCategory.SURVIVAL, "Hunger",
+                Material.COOKED_BEEF, "custom", hungerOptions(),
+                "§8pinned-full: food pinned at 20, sprint always legal.",
+                "§8natural: vanilla drain; eats at the threshold below.",
+                "§8untouched: no policy — vanilla/other plugins decide."));
         d.add(SettingDescriptor.integer("eat-threshold", SettingCategory.SURVIVAL, "Eat threshold",
                 Material.BREAD, "", s -> s.hunger().eatThreshold(), 1, 5, 0, 20,
                 (s, v) -> s.withHunger(new Hunger(s.hunger().natural(), (int) Math.round(v))),
                 "§8Food level the boxer eats at (0-20).",
-                "§8Only used with natural hunger on."));
-        d.add(SettingDescriptor.toggle("self-heal", SettingCategory.SURVIVAL, "Self-heal",
-                Material.SPLASH_POTION, s -> s.selfHeal().enabled(),
-                s -> s.withSelfHeal(selfHeal(s).enabled(!s.selfHeal().enabled())),
-                "§8Retreat and splash instant-health when low,",
-                "§8then re-engage (mortal boxers only)."));
-        d.add(SettingDescriptor.number("heal-trigger", SettingCategory.SURVIVAL, "Heal trigger HP",
-                Material.REDSTONE, "hp", s -> s.selfHeal().triggerHealth(), 1.0, 2.0, 0.0, 20.0,
-                (s, v) -> s.withSelfHeal(selfHeal(s)
-                        .triggerHealth(Math.min(v, s.selfHeal().resumeHealth()))),
-                "§8Health that makes the boxer disengage (0-20).",
-                "§8(Kept at or below the resume health.)"));
-        d.add(SettingDescriptor.number("heal-resume", SettingCategory.SURVIVAL, "Heal resume HP",
-                Material.GLOWSTONE_DUST, "hp", s -> s.selfHeal().resumeHealth(), 1.0, 2.0, 0.0, 20.0,
-                (s, v) -> s.withSelfHeal(selfHeal(s)
-                        .resumeHealth(Math.max(v, s.selfHeal().triggerHealth()))),
-                "§8Health it heals back to before re-engaging.",
-                "§8(Kept at or above the trigger health.)"));
-        d.add(SettingDescriptor.integer("splash-cap", SettingCategory.SURVIVAL, "Splash cap",
-                Material.BREWING_STAND, "", s -> s.selfHeal().splashCap(), 1, 6, 0, 36,
-                (s, v) -> s.withSelfHeal(selfHeal(s).splashCap((int) Math.round(v))),
-                "§8Most pots spent on one heal (0-36)."));
+                "§8Only used with natural hunger on.")
+                .requires("Hunger: natural", s -> s.hunger().natural()));
 
-        /* ---- Items ----------------------------------------------------- */
+        /* ---- Items (slots live on the Hotbar layout screen) -------------- */
         d.add(SettingDescriptor.toggle("auto-pickup", SettingCategory.ITEMS, "Auto-pickup",
                 Material.HOPPER, s -> s.items().autoPickup(),
                 s -> s.withItems(items(s).autoPickup(!s.items().autoPickup())),
@@ -206,55 +239,6 @@ final class SettingsRegistry {
                 "§8default — wears armor on hit and weapons on",
                 "§8attack like a real player (locked kits stay",
                 "§8unbreakable regardless)."));
-        d.add(SettingDescriptor.integer("weapon-slot", SettingCategory.ITEMS, "Weapon slot",
-                Material.DIAMOND_SWORD, "", s -> s.items().weaponSlot(), 1, 1, 0, 8,
-                (s, v) -> s.withItems(items(s).weaponSlot((int) Math.round(v))),
-                "§8Hotbar slot holding the melee weapon (0-8)."));
-        d.add(SettingDescriptor.integer("rod-slot", SettingCategory.ITEMS, "Rod slot",
-                Material.FISHING_ROD, "", s -> s.items().rodSlot(), 1, 1, 0, 8,
-                (s, v) -> s.withItems(items(s).rodSlot((int) Math.round(v))),
-                "§8Hotbar slot holding the fishing rod (0-8)."));
-        d.add(SettingDescriptor.integer("pot-slot", SettingCategory.ITEMS, "Potion slot",
-                Material.SPLASH_POTION, "", s -> s.items().potSlot(), 1, 1, 0, 8,
-                (s, v) -> s.withItems(items(s).potSlot((int) Math.round(v))),
-                "§8Hotbar slot holding heal potions (0-8)."));
-        d.add(SettingDescriptor.toggle("fill-splash-pots", SettingCategory.ITEMS, "Fill splash pots",
-                Material.SPLASH_POTION, s -> s.items().fillSplashPots(),
-                s -> s.withItems(items(s).fillSplashPots(!s.items().fillSplashPots())),
-                "§8Seed the hotbar with a finite supply of",
-                "§8instant-health splash potions the boxer",
-                "§8throws to heal — and can run out of."));
-        d.add(SettingDescriptor.integer("splash-pot-count", SettingCategory.ITEMS, "Splash pot count",
-                Material.BREWING_STAND, "", s -> s.items().splashPotCount(), 1, 3, 0, 9,
-                (s, v) -> s.withItems(items(s).splashPotCount((int) Math.round(v))),
-                "§8How many splash potions to seed (0-9),",
-                "§8when Fill splash pots is on."));
-        d.add(SettingDescriptor.integer("food-slot", SettingCategory.ITEMS, "Food slot",
-                Material.COOKED_BEEF, "", s -> s.items().foodSlot(), 1, 1, 0, 8,
-                (s, v) -> s.withItems(items(s).foodSlot((int) Math.round(v))),
-                "§8Hotbar slot holding food (0-8)."));
-        d.add(SettingDescriptor.integer("block-slot", SettingCategory.ITEMS, "Block slot",
-                Material.COBBLESTONE, "", s -> s.items().blockSlot(), 1, 1, 0, 8,
-                (s, v) -> s.withItems(items(s).blockSlot((int) Math.round(v))),
-                "§8Hotbar slot holding blocks to place (0-8)."));
-
-        /* ---- W-tap ----------------------------------------------------- */
-        d.add(SettingDescriptor.toggle("wtap", SettingCategory.WTAP, "W-tap",
-                Material.FEATHER, s -> s.wtap().enabled(),
-                s -> s.withWtap(new WTap(!s.wtap().enabled(),
-                        s.wtap().delayTicks(), s.wtap().releaseTicks())),
-                "§8Release+re-press forward after a hit to",
-                "§8re-arm sprint knockback."));
-        d.add(SettingDescriptor.integer("wtap-delay", SettingCategory.WTAP, "W-tap delay",
-                Material.REPEATER, "t", s -> s.wtap().delayTicks(), 1, 5, 0, 20,
-                (s, v) -> s.withWtap(new WTap(s.wtap().enabled(),
-                        (int) Math.round(v), s.wtap().releaseTicks())),
-                "§8Ticks after a hit before forward releases (0-20)."));
-        d.add(SettingDescriptor.integer("wtap-release", SettingCategory.WTAP, "W-tap release",
-                Material.REDSTONE, "t", s -> s.wtap().releaseTicks(), 1, 5, 1, 20,
-                (s, v) -> s.withWtap(new WTap(s.wtap().enabled(),
-                        s.wtap().delayTicks(), (int) Math.round(v))),
-                "§8Ticks forward stays released (1-20)."));
 
         return List.copyOf(d);
     }
@@ -314,6 +298,38 @@ final class SettingsRegistry {
                     s -> s.withDeath(new Death(s.death().dropItemsOnDeath(), mode)),
                     s -> s.death().mode() == mode));
         }
+        return options;
+    }
+
+    /**
+     * The hunger policy as ONE three-state choice over the two underlying
+     * booleans ({@code feedHunger}, {@code hunger.natural}) — the fields, the
+     * parser and the writer stay untouched, so the pinned
+     * {@code parse(write(s)) == s} round-trip is unaffected.
+     *
+     * <p>Semantics come from the consumers: {@code HungerGuard} pins food only
+     * while {@code feedHunger && !natural}, and the eat routine
+     * ({@code SeekFoodGoal}) runs only while {@code natural}. So {@code (true,
+     * true)} already behaves as natural — the guard defers — and every one of
+     * the four boolean states matches exactly one option below (the knob can
+     * never fall back to its "custom" label). Selecting natural normalises
+     * {@code (true, true)} to {@code (false, true)}: behaviourally identical,
+     * and only ever written when the operator picks the option.</p>
+     */
+    private static @NotNull List<CycleOption> hungerOptions() {
+        List<CycleOption> options = new ArrayList<>();
+        options.add(new CycleOption("pinned-full",
+                s -> s.withFeedHunger(true)
+                        .withHunger(new Hunger(false, s.hunger().eatThreshold())),
+                s -> s.feedHunger() && !s.hunger().natural()));
+        options.add(new CycleOption("natural",
+                s -> s.withFeedHunger(false)
+                        .withHunger(new Hunger(true, s.hunger().eatThreshold())),
+                s -> s.hunger().natural()));
+        options.add(new CycleOption("untouched",
+                s -> s.withFeedHunger(false)
+                        .withHunger(new Hunger(false, s.hunger().eatThreshold())),
+                s -> !s.feedHunger() && !s.hunger().natural()));
         return options;
     }
 
@@ -382,50 +398,31 @@ final class SettingsRegistry {
 
     private record ItemsEdit(@NotNull Items i) {
         @NotNull Items autoPickup(boolean v) {
-            return with(v, i.lockLoadout(), i.weaponSlot(), i.rodSlot(), i.potSlot(),
-                    i.foodSlot(), i.blockSlot(), i.unbreakableKit(), i.fillSplashPots(), i.splashPotCount());
+            return with(v, i.lockLoadout(), i.unbreakableKit(), i.fillSplashPots(),
+                    i.splashPotCount());
         }
         @NotNull Items lockLoadout(boolean v) {
-            return with(i.autoPickup(), v, i.weaponSlot(), i.rodSlot(), i.potSlot(),
-                    i.foodSlot(), i.blockSlot(), i.unbreakableKit(), i.fillSplashPots(), i.splashPotCount());
-        }
-        @NotNull Items weaponSlot(int v) {
-            return with(i.autoPickup(), i.lockLoadout(), v, i.rodSlot(), i.potSlot(),
-                    i.foodSlot(), i.blockSlot(), i.unbreakableKit(), i.fillSplashPots(), i.splashPotCount());
-        }
-        @NotNull Items rodSlot(int v) {
-            return with(i.autoPickup(), i.lockLoadout(), i.weaponSlot(), v, i.potSlot(),
-                    i.foodSlot(), i.blockSlot(), i.unbreakableKit(), i.fillSplashPots(), i.splashPotCount());
-        }
-        @NotNull Items potSlot(int v) {
-            return with(i.autoPickup(), i.lockLoadout(), i.weaponSlot(), i.rodSlot(), v,
-                    i.foodSlot(), i.blockSlot(), i.unbreakableKit(), i.fillSplashPots(), i.splashPotCount());
-        }
-        @NotNull Items foodSlot(int v) {
-            return with(i.autoPickup(), i.lockLoadout(), i.weaponSlot(), i.rodSlot(), i.potSlot(),
-                    v, i.blockSlot(), i.unbreakableKit(), i.fillSplashPots(), i.splashPotCount());
-        }
-        @NotNull Items blockSlot(int v) {
-            return with(i.autoPickup(), i.lockLoadout(), i.weaponSlot(), i.rodSlot(), i.potSlot(),
-                    i.foodSlot(), v, i.unbreakableKit(), i.fillSplashPots(), i.splashPotCount());
+            return with(i.autoPickup(), v, i.unbreakableKit(), i.fillSplashPots(),
+                    i.splashPotCount());
         }
         @NotNull Items unbreakableKit(boolean v) {
-            return with(i.autoPickup(), i.lockLoadout(), i.weaponSlot(), i.rodSlot(), i.potSlot(),
-                    i.foodSlot(), i.blockSlot(), v, i.fillSplashPots(), i.splashPotCount());
+            return with(i.autoPickup(), i.lockLoadout(), v, i.fillSplashPots(),
+                    i.splashPotCount());
         }
         @NotNull Items fillSplashPots(boolean v) {
-            return with(i.autoPickup(), i.lockLoadout(), i.weaponSlot(), i.rodSlot(), i.potSlot(),
-                    i.foodSlot(), i.blockSlot(), i.unbreakableKit(), v, i.splashPotCount());
+            return with(i.autoPickup(), i.lockLoadout(), i.unbreakableKit(), v,
+                    i.splashPotCount());
         }
         @NotNull Items splashPotCount(int v) {
-            return with(i.autoPickup(), i.lockLoadout(), i.weaponSlot(), i.rodSlot(), i.potSlot(),
-                    i.foodSlot(), i.blockSlot(), i.unbreakableKit(), i.fillSplashPots(), v);
+            return with(i.autoPickup(), i.lockLoadout(), i.unbreakableKit(),
+                    i.fillSplashPots(), v);
         }
-        private static @NotNull Items with(boolean autoPickup, boolean lockLoadout, int weaponSlot,
-                int rodSlot, int potSlot, int foodSlot, int blockSlot, boolean unbreakableKit,
-                boolean fillSplashPots, int splashPotCount) {
-            return new Items(autoPickup, lockLoadout, weaponSlot, rodSlot, potSlot, foodSlot,
-                    blockSlot, unbreakableKit, fillSplashPots, splashPotCount);
+        // The five slot fields pass through untouched — the hotbar layout
+        // screen (HotbarRoles) is the only writer of role→slot assignments.
+        private @NotNull Items with(boolean autoPickup, boolean lockLoadout,
+                boolean unbreakableKit, boolean fillSplashPots, int splashPotCount) {
+            return new Items(autoPickup, lockLoadout, i.weaponSlot(), i.rodSlot(), i.potSlot(),
+                    i.foodSlot(), i.blockSlot(), unbreakableKit, fillSplashPots, splashPotCount);
         }
     }
 }

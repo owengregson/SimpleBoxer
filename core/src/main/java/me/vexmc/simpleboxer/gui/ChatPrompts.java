@@ -38,11 +38,6 @@ public final class ChatPrompts implements Listener {
         this.scheduling = scheduling;
     }
 
-    /** Whether this player is mid-prompt (used to suppress menu re-opens). */
-    public boolean awaiting(@NotNull UUID playerId) {
-        return pending.containsKey(playerId);
-    }
-
     public void prompt(@NotNull Player player, @NotNull String promptLine,
             @NotNull Consumer<String> onInput) {
         prompt(player, promptLine, onInput, () -> {});

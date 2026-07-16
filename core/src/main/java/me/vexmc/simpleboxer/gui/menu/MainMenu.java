@@ -55,23 +55,12 @@ public final class MainMenu extends Menu {
                                 "§eClick to open").build(),
                 click -> new PresetsMenu(gui(), this).open(click.player())));
 
-        set(30, Button.of(Icon.of(Material.COMPARATOR)
+        set(31, Button.of(Icon.of(Material.COMPARATOR)
                         .name("§d§lPlugin Settings")
                         .lore("§7Tab-list visibility and config reload.",
                                 "",
                                 "§eClick to open").build(),
                 click -> new PluginSettingsMenu(gui(), this).open(click.player())));
-
-        set(32, Button.of(Icon.of(Material.WRITABLE_BOOK)
-                        .name("§f§lReload Config")
-                        .lore("§7Re-read config.yml from disk.",
-                                "",
-                                "§eClick to reload").build(),
-                click -> {
-                    gui().config().reload();
-                    click.player().sendMessage("§aSimpleBoxer configuration reloaded.");
-                    click.refresh();
-                }));
 
         set(40, Button.of(MenuParts.close(), click -> click.player().closeInventory()));
 

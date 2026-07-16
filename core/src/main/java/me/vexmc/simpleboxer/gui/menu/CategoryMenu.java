@@ -5,6 +5,7 @@ import me.vexmc.simpleboxer.gui.Button;
 import me.vexmc.simpleboxer.gui.Gui;
 import me.vexmc.simpleboxer.gui.Icon;
 import me.vexmc.simpleboxer.gui.Menu;
+import org.bukkit.Material;
 import org.bukkit.inventory.ItemStack;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
@@ -14,7 +15,9 @@ import org.jetbrains.annotations.Nullable;
  * {@link PaginatedMenu} — no magic slot numbers, the grid grows to fit whatever
  * {@link SettingsRegistry} declares. Each cell is a generic
  * {@link DescriptorButton} bound to this menu, so a click retunes/persists the
- * {@link SettingsTarget} and re-renders in place.
+ * {@link SettingsTarget} and re-renders in place. The Items page adds one
+ * footer door: the hotbar-layout editor, which owns the role→slot assignment
+ * the registry deliberately does not describe as knobs.
  */
 final class CategoryMenu extends PaginatedMenu<SettingDescriptor> {
 
@@ -48,5 +51,20 @@ final class CategoryMenu extends PaginatedMenu<SettingDescriptor> {
                                 ? "§8Saved to config.yml"
                                 : "§8Applied to this boxer instantly")
                 .build();
+    }
+
+    @Override
+    protected void footer() {
+        // The hotbar's role→slot assignment is one picture, not five integer
+        // knobs — it gets its own screen off the Items page.
+        if (category == SettingCategory.ITEMS) {
+            set(47, Button.of(Icon.of(Material.DIAMOND_SWORD).clean()
+                            .name("§b§lHotbar layout")
+                            .lore("§7Which hotbar slot carries the weapon,",
+                                    "§7rod, potions, food and blocks.",
+                                    "",
+                                    "§eClick to arrange").build(),
+                    click -> new HotbarLayoutMenu(gui(), this, target).open(click.player())));
+        }
     }
 }

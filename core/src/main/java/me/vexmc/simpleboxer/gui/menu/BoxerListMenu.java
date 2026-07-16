@@ -25,6 +25,13 @@ final class BoxerListMenu extends PaginatedMenu<Boxer> {
         super(gui, parent, "§8Manage Boxers");
     }
 
+    // Head lore (paused/target/ping) drifts while the roster sits open —
+    // re-render once a second rather than only on interaction.
+    @Override
+    protected int refreshEveryTicks() {
+        return 20;
+    }
+
     @Override
     protected @NotNull List<Boxer> items() {
         List<Boxer> all = new ArrayList<>(gui().manager().all());

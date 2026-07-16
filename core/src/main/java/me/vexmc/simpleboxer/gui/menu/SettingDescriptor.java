@@ -2,7 +2,6 @@ package me.vexmc.simpleboxer.gui.menu;
 
 import java.util.List;
 import java.util.function.BiFunction;
-import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.function.ToDoubleFunction;
 import java.util.function.UnaryOperator;
@@ -17,17 +16,22 @@ import org.jetbrains.annotations.Nullable;
  * exposing a brand-new {@link BoxerSettings} field is a one-line addition to
  * {@link SettingsRegistry} — never another hand-placed icon.
  *
- * <p>A descriptor is one of four {@link Kind kinds}; the kind decides which
+ * <p>A descriptor is one of three {@link Kind kinds}; the kind decides which
  * payload fields carry meaning and how the button reacts to a click, while the
  * shared header fields (id, category, name, icon, help) render the same for all
  * of them. Instances are built through the per-kind static factories so an
  * ill-formed descriptor can't be constructed, and reads/writes always go
  * through {@link BoxerSettings}'s {@code withX(...)} copies — the record stays
  * immutable.</p>
+ *
+ * <p>A knob may depend on a master toggle ({@link #requires}): the renderer
+ * dims it while the master is off, but the click stays live — pre-configuring
+ * a dependent value before flipping its master on is deliberate, not an
+ * error.</p>
  */
 final class SettingDescriptor {
 
-    enum Kind { TOGGLE, NUMERIC, CYCLE, TEXT }
+    enum Kind { TOGGLE, NUMERIC, CYCLE }
 
     /**
      * One choice of a {@link Kind#CYCLE} knob: how it reads, how selecting it
@@ -38,6 +42,9 @@ final class SettingDescriptor {
             @NotNull Predicate<BoxerSettings> matches) {}
 
     /* ---- shared header ------------------------------------------------- */
+    // The id is the knob's stable key — the vocabulary config docs and other
+    // workstreams' registry edits anchor on. Nothing reads it at runtime, but
+    // the strings must survive verbatim in the factory calls.
     private final String id;
     private final SettingCategory category;
     private final Kind kind;
@@ -63,9 +70,11 @@ final class SettingDescriptor {
     private final @Nullable List<CycleOption> options;
     private final @Nullable String customLabel;
 
-    /* ---- TEXT payload -------------------------------------------------- */
-    private final @Nullable Function<BoxerSettings, String> text;
-    private final @Nullable BiFunction<BoxerSettings, String, BoxerSettings> setText;
+    /* ---- dependency ------------------------------------------------------
+       Both null for an independent knob. When set, the renderer dims the tile
+       while enabledWhen is false and cites requiresLabel in the lore. */
+    private final @Nullable Predicate<BoxerSettings> enabledWhen;
+    private final @Nullable String requiresLabel;
 
     private SettingDescriptor(String id, SettingCategory category, Kind kind, String name,
             Material material, List<String> help,
@@ -74,8 +83,7 @@ final class SettingDescriptor {
             @Nullable BiFunction<BoxerSettings, Double, BoxerSettings> setNumber,
             double small, double big, double min, double max, boolean integer, String unit,
             @Nullable List<CycleOption> options, @Nullable String customLabel,
-            @Nullable Function<BoxerSettings, String> text,
-            @Nullable BiFunction<BoxerSettings, String, BoxerSettings> setText) {
+            @Nullable Predicate<BoxerSettings> enabledWhen, @Nullable String requiresLabel) {
         this.id = id;
         this.category = category;
         this.kind = kind;
@@ -94,8 +102,8 @@ final class SettingDescriptor {
         this.unit = unit;
         this.options = options;
         this.customLabel = customLabel;
-        this.text = text;
-        this.setText = setText;
+        this.enabledWhen = enabledWhen;
+        this.requiresLabel = requiresLabel;
     }
 
     /* ------------------------------------------------------------------ */
@@ -139,26 +147,20 @@ final class SettingDescriptor {
     }
 
     /**
-     * A free-text knob typed in chat. No {@link BoxerSettings} field needs one
-     * today (every knob is a number, a flag or an enum), but the kind exists so
-     * a future text field is a single descriptor away — the renderer already
-     * handles it.
+     * A copy of this descriptor gated on a master toggle. {@code masterName}
+     * is the human name the dimmed tile's lore cites ("requires Self-heal");
+     * {@code when} reads whether the master is currently on.
      */
-    static @NotNull SettingDescriptor text(@NotNull String id, @NotNull SettingCategory category,
-            @NotNull String name, @NotNull Material material,
-            @NotNull Function<BoxerSettings, String> get,
-            @NotNull BiFunction<BoxerSettings, String, BoxerSettings> set, @NotNull String... help) {
-        return new SettingDescriptor(id, category, Kind.TEXT, name, material, List.of(help),
-                null, null, null, null, 0, 0, 0, 0, false, "", null, null, get, set);
+    @NotNull SettingDescriptor requires(@NotNull String masterName,
+            @NotNull Predicate<BoxerSettings> when) {
+        return new SettingDescriptor(id, category, kind, name, material, help,
+                state, toggle, number, setNumber, small, big, min, max, integer, unit,
+                options, customLabel, when, masterName);
     }
 
     /* ------------------------------------------------------------------ */
     /*  Accessors (package-private — the renderer's only reader)           */
     /* ------------------------------------------------------------------ */
-
-    @NotNull String id() {
-        return id;
-    }
 
     @NotNull SettingCategory category() {
         return category;
@@ -178,6 +180,16 @@ final class SettingDescriptor {
 
     @NotNull List<String> help() {
         return help;
+    }
+
+    /** True while this knob's master toggle (if any) is on. */
+    boolean enabledFor(@NotNull BoxerSettings settings) {
+        return enabledWhen == null || enabledWhen.test(settings);
+    }
+
+    /** The master's human name for the dimmed lore; null for an independent knob. */
+    @Nullable String requiresLabel() {
+        return requiresLabel;
     }
 
     @NotNull Predicate<BoxerSettings> state() {
@@ -226,13 +238,5 @@ final class SettingDescriptor {
 
     @NotNull String customLabel() {
         return customLabel == null ? "custom" : customLabel;
-    }
-
-    @NotNull Function<BoxerSettings, String> text() {
-        return java.util.Objects.requireNonNull(text);
-    }
-
-    @NotNull BiFunction<BoxerSettings, String, BoxerSettings> setText() {
-        return java.util.Objects.requireNonNull(setText);
     }
 }

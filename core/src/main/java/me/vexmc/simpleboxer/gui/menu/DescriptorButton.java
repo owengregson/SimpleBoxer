@@ -8,6 +8,7 @@ import me.vexmc.simpleboxer.gui.Button;
 import me.vexmc.simpleboxer.gui.Gui;
 import me.vexmc.simpleboxer.gui.Icon;
 import me.vexmc.simpleboxer.gui.Menu;
+import org.bukkit.Material;
 import org.bukkit.entity.Player;
 import org.bukkit.event.inventory.ClickType;
 import org.jetbrains.annotations.NotNull;
@@ -36,7 +37,6 @@ final class DescriptorButton {
             case TOGGLE -> toggleButton(target, descriptor, snapshot);
             case NUMERIC -> numericButton(gui, owner, target, descriptor, snapshot);
             case CYCLE -> cycleButton(target, descriptor, snapshot);
-            case TEXT -> textButton(gui, owner, target, descriptor, snapshot);
         };
     }
 
@@ -46,13 +46,17 @@ final class DescriptorButton {
 
     private static @NotNull Button toggleButton(@NotNull SettingsTarget target,
             @NotNull SettingDescriptor d, @NotNull BoxerSettings s) {
+        boolean enabled = d.enabledFor(s);
         boolean on = d.state().test(s);
         List<String> lore = new ArrayList<>();
         lore.add("§7State: " + MenuParts.onOff(on));
+        if (!enabled) {
+            lore.add("§8requires " + d.requiresLabel());
+        }
         lore.addAll(d.help());
         lore.add("");
         lore.add("§8» §7Click to toggle");
-        Icon icon = Icon.of(d.material()).clean().glow(on).name("§b§l" + d.name()).lore(lore);
+        Icon icon = shell(d, enabled).glow(on && enabled).lore(lore);
         return Button.of(icon.build(), click -> {
             apply(target, d.toggle().apply(target.settings()));
             click.refresh();
@@ -61,15 +65,19 @@ final class DescriptorButton {
 
     private static @NotNull Button numericButton(@NotNull Gui gui, @NotNull Menu owner,
             @NotNull SettingsTarget target, @NotNull SettingDescriptor d, @NotNull BoxerSettings s) {
+        boolean enabled = d.enabledFor(s);
         double value = d.number().applyAsDouble(s);
         List<String> lore = new ArrayList<>();
         lore.add("§7Value: §a" + MenuParts.number(value) + d.unit());
+        if (!enabled) {
+            lore.add("§8requires " + d.requiresLabel());
+        }
         lore.addAll(d.help());
         lore.add("");
         lore.add(MenuParts.adjustHint("+" + trim(d.small()), "-" + trim(d.small()),
                 "±" + trim(d.big())));
         lore.add("§8» §7Q: §ftype a value");
-        Icon icon = Icon.of(d.material()).clean().name("§b§l" + d.name()).lore(lore);
+        Icon icon = shell(d, enabled).lore(lore);
         return Button.of(icon.build(), click -> {
             if (isDrop(click.click())) {
                 promptNumber(gui, owner, target, d, click.player());
@@ -87,14 +95,18 @@ final class DescriptorButton {
 
     private static @NotNull Button cycleButton(@NotNull SettingsTarget target,
             @NotNull SettingDescriptor d, @NotNull BoxerSettings s) {
+        boolean enabled = d.enabledFor(s);
         int index = currentIndex(d, s);
         String label = index >= 0 ? d.options().get(index).label() : "§o" + d.customLabel();
         List<String> lore = new ArrayList<>();
         lore.add("§7Value: §a" + label);
+        if (!enabled) {
+            lore.add("§8requires " + d.requiresLabel());
+        }
         lore.addAll(d.help());
         lore.add("");
         lore.add("§8» §7Left: §fnext  §7Right: §fprevious");
-        Icon icon = Icon.of(d.material()).clean().name("§b§l" + d.name()).lore(lore);
+        Icon icon = shell(d, enabled).lore(lore);
         return Button.of(icon.build(), click -> {
             BoxerSettings current = target.settings();
             List<SettingDescriptor.CycleOption> options = d.options();
@@ -112,28 +124,21 @@ final class DescriptorButton {
         });
     }
 
-    private static @NotNull Button textButton(@NotNull Gui gui, @NotNull Menu owner,
-            @NotNull SettingsTarget target, @NotNull SettingDescriptor d, @NotNull BoxerSettings s) {
-        List<String> lore = new ArrayList<>();
-        lore.add("§7Value: §a" + d.text().apply(s));
-        lore.addAll(d.help());
-        lore.add("");
-        lore.add("§8» §7Click to type a value");
-        Icon icon = Icon.of(d.material()).clean().name("§b§l" + d.name()).lore(lore);
-        return Button.of(icon.build(), click -> {
-            Player player = click.player();
-            gui.prompts().prompt(player, "Enter a value for " + d.name() + ":",
-                    input -> {
-                        apply(target, d.setText().apply(target.settings(), input));
-                        owner.open(player);
-                    },
-                    () -> owner.open(player));
-        });
-    }
-
     /* ------------------------------------------------------------------ */
     /*  Shared helpers                                                     */
     /* ------------------------------------------------------------------ */
+
+    /**
+     * The tile shell every kind shares. A dependent knob whose master toggle
+     * is off renders dimmed — gray dye, gray name — so a page reads at a
+     * glance which values are currently inert; the click stays live, because
+     * pre-configuring a dependent value before flipping its master on is
+     * useful, not an error.
+     */
+    private static @NotNull Icon shell(@NotNull SettingDescriptor d, boolean enabled) {
+        return Icon.of(enabled ? d.material() : Material.GRAY_DYE).clean()
+                .name((enabled ? "§b§l" : "§7§l") + d.name());
+    }
 
     /**
      * Push a new profile through the target. A clamp guards every adjuster and

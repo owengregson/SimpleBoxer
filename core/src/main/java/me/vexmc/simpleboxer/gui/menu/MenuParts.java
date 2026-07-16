@@ -21,8 +21,6 @@ final class MenuParts {
 
     /** Full-window background — placed under every screen for a sleek frame. */
     static final Material BACKGROUND = Material.BLACK_STAINED_GLASS_PANE;
-    static final Material POSITIVE = Material.LIME_STAINED_GLASS_PANE;
-    static final Material NEGATIVE = Material.RED_STAINED_GLASS_PANE;
 
     static @NotNull ItemStack back() {
         return Icon.of(Material.ARROW).name("§7« §fBack").build();
@@ -30,12 +28,6 @@ final class MenuParts {
 
     static @NotNull ItemStack close() {
         return Icon.of(Material.BARRIER).name("§c✖ Close").build();
-    }
-
-    /** A title plate for the top-centre of a screen. */
-    static @NotNull ItemStack header(@NotNull Material material, @NotNull String title,
-            @NotNull String... subtitle) {
-        return Icon.of(material).glow().name("§6§l" + title).lore(subtitle).build();
     }
 
     /* ---- value formatting --------------------------------------------- */
