@@ -39,7 +39,7 @@ class BrainTest {
         double bearingToMe = Math.toDegrees(Math.atan2(-(bx - target.x()), (bz - target.z())));
         Perception.SelfState self = new Perception.SelfState(
                 bx, phys.y(), bz, phys.velocity(), phys.onGround(), phys.horizontalCollision(),
-                1.0, 1.0, Perception.UseItemState.NONE, false);
+                1.0, 1.0, Perception.UseItemState.NONE, false, 0.1, -1);
         Perception.TargetState tgt = new Perception.TargetState(
                 target.x(), target.y(), target.z(), target.y() + 1.62, Vec3d.ZERO,
                 bearingToMe, 0.0, 0.0, distance, false);
@@ -161,5 +161,59 @@ class BrainTest {
         assertTrue(maxX > 4.0 || maxAbsZ > 3.5,
                 "the boxer worked around the wall instead of freezing (maxX="
                         + maxX + ", maxAbsZ=" + maxAbsZ + ", final x=" + phys.x() + " z=" + phys.z() + ")");
+    }
+
+    /** The platform-and-off-line-stairs arena shared by the elevation tests: target
+     *  platform top 67 over cells x8..10 z0..1, staircase around the corner at x=11. */
+    private static FakeWorld elevatedArena() {
+        return FakeWorld.floorAt(64)
+                .wall(8, 66, 0, 10, 66, 1)
+                .block(11, 64, 3)                                    // top 65
+                .block(11, 64, 2).block(11, 65, 2)                   // top 66
+                .block(11, 64, 1).block(11, 65, 1).block(11, 66, 1); // top 67
+    }
+
+    /**
+     * THE headline regression: a target on a raised platform whose only access is
+     * an off-line staircase ~11 cells away, behind a corner. This is the one test
+     * that would have caught the walk-only short-circuit, the horizontal-only gate
+     * shutoff, the 10-cell search horizon, AND the follower's route-dropping —
+     * together. The boxer's own feet must reach the platform level.
+     */
+    @Test
+    void climbsOffLineStairsToAnElevatedTarget() {
+        FakeWorld world = elevatedArena();
+        ClientPhysics phys = new ClientPhysics(0.5, 64, 0.5);
+        Vec3d target = new Vec3d(9.5, 67, 0.5);
+        Brain brain = new Brain(BoxerSettings.DEFAULTS, SEED, 0.0f, 0.0f);
+        double topY = 64.0;
+        for (int i = 0; i < 600 && topY < 67.0; i++) {
+            Perception p = perceive(phys, target);
+            BrainOutput out = brain.tick(p, world, i * 50L);
+            phys.step(out.move(), out.aimYaw(), world);
+            topY = Math.max(topY, phys.y());
+        }
+        assertTrue(topY >= 67.0,
+                "the boxer's feet must reach the platform level (got " + topY + ")");
+    }
+
+    /**
+     * Follower resilience: a 1-cell strafe by the platform player must NOT dissolve
+     * a committed climb — the latch holds the route and the replan throttle keeps
+     * the swap attempt from thrashing.
+     */
+    @Test
+    void committedClimbSurvivesTargetCellChanges() {
+        FakeWorld world = elevatedArena();
+        ClientPhysics phys = new ClientPhysics(0.5, 64, 0.5);
+        Brain brain = new Brain(BoxerSettings.DEFAULTS, SEED, 0.0f, 0.0f);
+
+        brain.tick(perceive(phys, new Vec3d(9.5, 67, 0.5)), world, 0L);
+        assertTrue(brain.memory().path != null, "an elevated target must mint a climb route");
+        assertTrue(brain.memory().climbLatch, "and arm the climb latch");
+
+        brain.tick(perceive(phys, new Vec3d(8.5, 67, 1.5)), world, 50L);
+        assertTrue(brain.memory().path != null, "a 1-cell strafe must not dissolve the climb");
+        assertTrue(brain.memory().climbLatch, "the latch holds until the level is reached");
     }
 }

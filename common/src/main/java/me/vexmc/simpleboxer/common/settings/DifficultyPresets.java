@@ -7,6 +7,7 @@ import java.util.Map;
 import java.util.Set;
 import me.vexmc.simpleboxer.common.aim.AimParams;
 import me.vexmc.simpleboxer.common.settings.BoxerSettings.Combat;
+import me.vexmc.simpleboxer.common.settings.BoxerSettings.CritSpam;
 import me.vexmc.simpleboxer.common.settings.BoxerSettings.Death;
 import me.vexmc.simpleboxer.common.settings.BoxerSettings.Hunger;
 import me.vexmc.simpleboxer.common.settings.BoxerSettings.InvincibleMode;
@@ -46,28 +47,28 @@ public final class DifficultyPresets {
             0, 0.0, 0.0, AimParams.SMOOTH, 3.0, 180.0,
             WTap.OFF, new Movement(Movement.Style.STAND, 0.0, false), true, true,
             InvincibleMode.ZERO_DAMAGE, Death.RESPAWN_KEEP, Combat.OFF, SelfHeal.OFF,
-            FIXTURE_ITEMS, Hunger.DEFAULT);
+            FIXTURE_ITEMS, Hunger.DEFAULT, CritSpam.OFF);
 
     /** High ping, slow sloppy clicks, drifting aim, walks rather than sprints. */
     public static final BoxerSettings EASY = new BoxerSettings(
             120, 4.0, 0.5, AimParams.SLOPPY, 2.8, 18.0,
             WTap.OFF, new Movement(Movement.Style.RUSH, 0.0, false), true, true,
             InvincibleMode.ZERO_DAMAGE, Death.RESPAWN_KEEP, Combat.OFF, SelfHeal.OFF,
-            FIXTURE_ITEMS, Hunger.DEFAULT);
+            FIXTURE_ITEMS, Hunger.DEFAULT, CritSpam.OFF);
 
     /** An ordinary player: average ping, mid CPS, smooth-pursuit aim. */
     public static final BoxerSettings MEDIUM = new BoxerSettings(
             60, 7.0, 0.35, AimParams.SMOOTH, 2.9, 12.0,
             WTap.OFF, Movement.RUSH, true, true,
             InvincibleMode.ZERO_DAMAGE, Death.RESPAWN_KEEP, Combat.OFF, SelfHeal.OFF,
-            FIXTURE_ITEMS, Hunger.DEFAULT);
+            FIXTURE_ITEMS, Hunger.DEFAULT, CritSpam.OFF);
 
     /** A practiced PvPer: low ping, 10 CPS, sharp aim, disciplined w-taps. */
     public static final BoxerSettings HARD = new BoxerSettings(
             35, 10.0, 0.25, AimParams.SHARP, 3.0, 8.0,
             new WTap(true, 1, 2), Movement.RUSH, true, true,
             InvincibleMode.ZERO_DAMAGE, Death.RESPAWN_KEEP, Combat.OFF, SelfHeal.OFF,
-            FIXTURE_ITEMS, Hunger.DEFAULT);
+            FIXTURE_ITEMS, Hunger.DEFAULT, CritSpam.OFF);
 
     /** Tournament-grade: tight aim spring, fast taps, circles its target. */
     public static final BoxerSettings EXPERT = new BoxerSettings(
@@ -75,19 +76,20 @@ public final class DifficultyPresets {
             new WTap(true, 0, 2), new Movement(Movement.Style.STRAFE_CIRCLE, 0.0, true), true, true,
             InvincibleMode.ZERO_DAMAGE, Death.RESPAWN_KEEP,
             new Combat(false, false, 3.0, 6.0, Combat.StrafePreset.JUKE, false, 0.0), SelfHeal.OFF,
-            FIXTURE_ITEMS, Hunger.DEFAULT);
+            FIXTURE_ITEMS, Hunger.DEFAULT, CritSpam.OFF);
 
     /** The machine: zero ping, locked aim, saturated clicks — a calibrator. */
     public static final BoxerSettings AIMBOT = new BoxerSettings(
             0, 16.0, 0.05, AimParams.LOCKED, 3.0, 1.0,
             new WTap(true, 0, 2), Movement.RUSH, true, true,
             InvincibleMode.ZERO_DAMAGE, Death.RESPAWN_KEEP, Combat.OFF, SelfHeal.OFF,
-            FIXTURE_ITEMS, Hunger.DEFAULT);
+            FIXTURE_ITEMS, Hunger.DEFAULT, CritSpam.OFF);
 
     /**
      * The showcase: a MORTAL sweaty PvPer that uses the full technique set —
      * adaptive circle-strafing, rod pokes to knock an approaching target back,
-     * blockhit combos (with Mental), and splash-pot self-heals when it drops
+     * blockhit combos (with Mental), ceiling crit-spam under a low roof, and
+     * splash-pot self-heals when it drops
      * low — dying, dropping its kit, and needing food like a real player.
      */
     public static final BoxerSettings SWEAT = new BoxerSettings(
@@ -100,7 +102,7 @@ public final class DifficultyPresets {
             // The sweat showcase actually carries a finite splash-pot supply so its
             // self-heal has something to throw (and can run out mid-fight).
             new Items(true, false, 0, 1, 2, 3, 4, false, true, 6),
-            new Hunger(true, 14));
+            new Hunger(true, 14), CritSpam.ON);
 
     private static final Map<String, BoxerSettings> BY_NAME = new LinkedHashMap<>();
 

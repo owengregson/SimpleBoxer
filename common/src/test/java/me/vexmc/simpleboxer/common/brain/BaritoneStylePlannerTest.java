@@ -242,4 +242,129 @@ class BaritoneStylePlannerTest {
         assertEquals(0.5, route.get().get(0).x(), 1.0E-9);
         assertEquals(0.5, route.get().get(0).z(), 1.0E-9);
     }
+
+    // --- 0.7.0: self-describing plans, production budgets, clearance, stairs ----
+
+    /**
+     * The production scenario the 0.6.x planner could not even represent: stairs
+     * ~11 cells out and around a corner, searched with the PRODUCTION elevation
+     * budget and the PRODUCTION adaptive extent (start cell (0,0) → goal cell
+     * (9,0): chebyshev 9 → extent min(32, max(10, 9+8)) = 17, which covers the
+     * staircase at x=11; the old fixed extent 10 + budget 400 could not).
+     */
+    @Test
+    void findsDistantOffLineStairsWithTheProductionBudget() {
+        FakeWorld world = FakeWorld.floorAt(64)
+                // Platform slab over cells x8..10, z0..1: top 67, sheer 3-block faces.
+                .wall(8, 66, 0, 10, 66, 1)
+                // Around-the-corner staircase at x=11, climbing north (z 3 → 1).
+                .block(11, 64, 3)                                    // top 65
+                .block(11, 64, 2).block(11, 65, 2)                   // top 66
+                .block(11, 64, 1).block(11, 65, 1).block(11, 66, 1); // top 67
+        var route = planner.plan(new Vec3d(0, 65, 0), new Vec3d(9.5, 67, 0.5), world,
+                Brain.ELEVATION_PLAN_BUDGET, true, Brain.elevationExtent(9));
+
+        assertTrue(route.isPresent(), "distant off-line stairs must be discoverable");
+        assertTrue(route.get().complete(), "and the plan must COMPLETE onto the platform");
+        assertEquals(67.0, route.get().endFloorY(), 1.0E-9, "self-described end level");
+        List<Vec3d> path = route.get().waypoints();
+        assertEquals(67.0, path.get(path.size() - 1).y(), 1.0E-9, "ends ON the platform");
+        assertTrue(path.stream().anyMatch(w -> w.x() > 10.0), "detours to the stairs at x=11");
+        assertTrue(path.stream().anyMatch(w -> w.y() == 65.0), "climbs the 65 step");
+        assertTrue(path.stream().anyMatch(w -> w.y() == 66.0), "climbs the 66 step");
+    }
+
+    /** A frontier-halted breadcrumb must SAY it is a breadcrumb (and where it ends). */
+    @Test
+    void partialRouteReportsIncompleteAndItsEndLevel() {
+        FakeWorld base = FakeWorld.floorAt(64);
+        CollisionView gated = new CollisionView() {
+            @Override
+            public List<Box> collidingBoxes(Box region) {
+                return base.collidingBoxes(region);
+            }
+
+            @Override
+            public double slipperiness(int x, int y, int z) {
+                return base.slipperiness(x, y, z);
+            }
+
+            @Override
+            public boolean isReadable(int x, int y, int z) {
+                return x < 4; // the loaded/region frontier
+            }
+        };
+        var route = planner.plan(new Vec3d(0, 65, 0), new Vec3d(8, 65, 0), gated, 4000, true,
+                BaritoneStylePlanner.MAX_EXTENT);
+
+        assertTrue(route.isPresent(), "an unreadable frontier yields a partial, not empty");
+        assertFalse(route.get().complete(), "a frontier-halted breadcrumb is not complete");
+        assertEquals(64.0, route.get().endFloorY(), 1.0E-9, "it ends at floor level");
+        for (Vec3d w : route.get().waypoints()) {
+            assertTrue(w.x() < 4.0, "no waypoint may cross into unreadable space: " + w);
+        }
+    }
+
+    /**
+     * Stair-block fidelity: a real stair cell (0.5 bottom lip across the cell plus
+     * a 1.0 back half) is walked by the vanilla auto-step as two 0.5 sub-steps —
+     * the WALK-ONLY pass must traverse it. The old footprint-max ground model read
+     * the cell as a +1.0 ASCEND and refused it without a jump.
+     */
+    @Test
+    void walkOnlyPassClimbsARealStairBlock() {
+        FakeWorld world = FakeWorld.floorAt(64)
+                .box(new Box(1.0, 64.0, 0.0, 2.0, 64.5, 1.0))  // bottom lip, top 64.5
+                .box(new Box(1.5, 64.0, 0.0, 2.0, 65.0, 1.0))  // back half, top 65
+                .wall(2, 64, 0, 3, 64, 0);                     // exit landing, top 65
+        var route = planner.plan(new Vec3d(0.5, 64, 0.5), new Vec3d(3.5, 65, 0.5), world,
+                500, false, BaritoneStylePlanner.MAX_EXTENT);
+
+        assertTrue(route.isPresent(), "the stair cell must be walk-only traversable");
+        assertTrue(route.get().complete());
+        List<Vec3d> path = route.get().waypoints();
+        assertEquals(65.0, path.get(path.size() - 1).y(), 1.0E-9, "tops out on the landing");
+        assertTrue(path.stream().anyMatch(w -> Math.floor(w.x()) == 1.0 && w.y() == 65.0),
+                "the stair cell is a waypoint at its standing surface (65)");
+    }
+
+    /**
+     * Clearance berth: beside a 7-cell wall the hug lane (ring-1 surcharge 1.0691
+     * per cell × 9) loses to one lane out (ring-2 surcharge 0.3564 × 10 + two extra
+     * diagonals 2.9524) — 45.6165 vs 42.1541 ticks, arithmetic in the class javadoc
+     * — so no waypoint may sit in the wall-adjacent lane.
+     */
+    @Test
+    void openGroundRouteKeepsATwoCellBerthOffAWall() {
+        FakeWorld world = FakeWorld.floorAt(64).wall(2, 64, 1, 8, 65, 1);
+        var route = planner.plan(new Vec3d(0.5, 65, 0.5), new Vec3d(10.5, 65, 0.5), world,
+                4000, true, BaritoneStylePlanner.MAX_EXTENT);
+
+        assertTrue(route.isPresent());
+        assertTrue(route.get().complete());
+        List<Vec3d> path = route.get().waypoints();
+        assertTrue(path.stream().anyMatch(w -> w.z() < 0.0),
+                "the route bows out of the hug lane (some waypoint at z < 0)");
+        for (Vec3d w : path) {
+            boolean besideWall = Math.floor(w.x()) >= 1.0 && Math.floor(w.x()) <= 9.0
+                    && Math.floor(w.z()) == 0.0;
+            assertFalse(besideWall, "no turn point may hug the wall-adjacent lane: " + w);
+        }
+    }
+
+    /** The berth is a preference, not a wall: a 1-wide corridor still routes. */
+    @Test
+    void narrowCorridorStaysRoutable() {
+        FakeWorld world = FakeWorld.floorAt(64)
+                .wall(1, 64, 1, 8, 65, 1)
+                .wall(1, 64, -1, 8, 65, -1);
+        var route = planner.plan(new Vec3d(0.5, 65, 0.5), new Vec3d(9.5, 65, 0.5), world,
+                2000, true, BaritoneStylePlanner.MAX_EXTENT);
+
+        assertTrue(route.isPresent(), "a finite clearance surcharge must never close a corridor");
+        assertTrue(route.get().complete());
+        for (Vec3d w : route.get().waypoints()) {
+            assertEquals(0.5, w.z(), 1.0E-9, "the only line through is the corridor itself");
+        }
+    }
 }

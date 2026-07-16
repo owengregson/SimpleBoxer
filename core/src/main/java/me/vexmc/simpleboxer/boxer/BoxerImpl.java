@@ -115,6 +115,15 @@ final class BoxerImpl implements Boxer {
      */
     private volatile Loadout loadout;
     private volatile boolean loadoutDirty;
+    /**
+     * Arms a splash-pot (re)seed on the owning thread. True from construction —
+     * a kitless boxer with fill-splash-pots still gets its supply, which the
+     * loadout-dirty seam alone never granted — and re-armed on respawn (the
+     * fresh inventory refills) and on retune (toggling the supply on at runtime
+     * seeds without an equip). {@link #seedConsumables()} is idempotent: it
+     * writes only empty slots, up to the configured count.
+     */
+    private volatile boolean consumablesDirty = true;
     /** Set by {@link #retune}; the owning thread re-tunes the brain. */
     private volatile boolean settingsDirty;
 
@@ -123,6 +132,13 @@ final class BoxerImpl implements Boxer {
             double vx, double vz, float yaw, boolean blocking, @NotNull Player entity) {}
 
     private @Nullable TargetView perceived;
+    /**
+     * The last matured {@link PlayerTraits} snapshot, mirrored into
+     * {@link Perception.SelfState} so the brain times its jumps from the same
+     * aged walk-speed / jump-boost values the integrator runs on.
+     */
+    private double knownWalkSpeed = ClientPhysics.DEFAULT_WALK_SPEED;
+    private int knownJumpBoost = -1;
     /** Previous matured target yaw, for the opponent-aim tracking-rate estimate. */
     private float prevTargetYaw;
     private boolean hasPrevTargetYaw;
@@ -140,6 +156,8 @@ final class BoxerImpl implements Boxer {
     private int usingItemTicks;
     /** Per-boxer block-change sequence for use-item packets (1.19+). */
     private int useSequence;
+    /** One WARNING per boxer when no Instant Health II stamp path lands (never silent). */
+    private boolean potionStampWarned;
     /**
      * A monotonic tick counter grouping knockback samples that share a server tick.
      * Written only by the owning tick; volatile so the knockback listeners (which
@@ -286,11 +304,16 @@ final class BoxerImpl implements Boxer {
             if (!syncKit()) {
                 loadoutDirty = true;
             } else {
-                seedConsumables();
+                consumablesDirty = true;
             }
         }
-        // Keep the pot slot loaded from the finite splash-pot reserve so the heal
+        // Seed once the kit has settled (never racing a pending kit write), then
+        // keep the pot slot loaded from the finite splash-pot reserve so the heal
         // routine can throw again next cycle — until the whole supply runs out.
+        if (!loadoutDirty && consumablesDirty) {
+            consumablesDirty = false;
+            seedConsumables();
+        }
         restockPotSlot();
         if (serverTicksEntity && hasAnchor) {
             reanchorServerPosition();
@@ -329,6 +352,10 @@ final class BoxerImpl implements Boxer {
         if (knownTraits != null) {
             physics.setWalkSpeed(knownTraits.walkSpeed());
             physics.setJumpBoostAmplifier(knownTraits.jumpBoostAmplifier());
+            // Mirror for perception: the brain must reason over the SAME aged
+            // values the integrator was just tuned with.
+            knownWalkSpeed = knownTraits.walkSpeed();
+            knownJumpBoost = knownTraits.jumpBoostAmplifier();
         }
 
         // 2. Decide via the brain, unless paused (a paused client still receives
@@ -642,7 +669,8 @@ final class BoxerImpl implements Boxer {
                 physics.onGround(), physics.horizontalCollision(),
                 healthPct(), hungerPct(),
                 usingItemTicks > 0 ? Perception.UseItemState.USING : Perception.UseItemState.NONE,
-                safeIsBlocking(spawned.player()));
+                safeIsBlocking(spawned.player()),
+                knownWalkSpeed, knownJumpBoost);
 
         Perception.TargetState targetState = null;
         TargetView view = perceived;
@@ -673,7 +701,8 @@ final class BoxerImpl implements Boxer {
         }
 
         return new Perception(self, targetState, Perception.TerrainView.OPEN,
-                inventoryView(), new Perception.CombatState(attackMeter(), false, serverTick),
+                inventoryView(), new Perception.CombatState(attackMeter(), false, serverTick,
+                        potsLaunched),
                 settings.pingMs());
     }
 
@@ -696,10 +725,12 @@ final class BoxerImpl implements Boxer {
 
     /**
      * Fill the boxer's finite splash-potion reserve when the config toggle asks for
-     * it. Instant-health SPLASH_POTIONs (which do not stack) go into the pot slot and
-     * then the next free, non-tool hotbar slots, up to {@code splashPotCount}. Runs on
-     * the owning thread at the loadout-dirty seam (spawn/respawn/equip), so a respawn
-     * refills a fresh supply; only empty slots are written.
+     * it. Instant-health SPLASH_POTIONs (which do not stack) go into the pot slot,
+     * then the next free, non-tool hotbar slots, then overflow into empty
+     * main-inventory slots 9–35, up to {@code splashPotCount} (a whole-inventory
+     * supply, not a hotbar-sized one). Runs on the owning thread at the
+     * consumables-dirty seam (spawn/respawn/equip/retune); only empty slots are
+     * written, so re-seeding is a top-up, never a clobber.
      */
     private void seedConsumables() {
         BoxerSettings.Items items = settings.items();
@@ -720,14 +751,33 @@ final class BoxerImpl implements Boxer {
                 placed++;
             }
         }
+        for (int slot = 9; slot <= 35 && placed < items.splashPotCount(); slot++) {
+            ItemStack existing = inventory.getItem(slot);
+            if (existing == null || existing.getType().isAir()) {
+                inventory.setItem(slot, splashHealPotion());
+                placed++;
+            }
+        }
     }
 
     /**
-     * When the pot slot has emptied (a pot was thrown) but reserves remain elsewhere in
-     * the hotbar, slide the next splash potion into the pot slot so the routine can throw
-     * again — a real player scrolling to their next pot. When no reserve is left the pot
-     * slot stays empty and {@code inventoryView().hasPots()} goes false, so the heal
-     * routine gives up: the supply has genuinely run out.
+     * When the pot slot has emptied (a pot was thrown) but reserves remain anywhere
+     * in the inventory, slide the next splash potion into the pot slot so the routine
+     * can throw again — the hotbar first (a real player scrolling to their next pot),
+     * then main-inventory slots 9–35 (the number-key move over their own inventory).
+     * When no reserve is left the pot slot stays empty and
+     * {@code inventoryView().hasPots()} goes false, so the heal routine gives up:
+     * the supply has genuinely run out.
+     *
+     * <p>Deliberately a direct owning-thread {@code setItem} pair rather than a
+     * {@code ServerboundContainerClickPacket} SWAP: the server is authoritative
+     * over inventory for every client (a real click only REQUESTS this same
+     * mutation), no combat-visible property differs, and the wire click would
+     * need three constructor eras (1.17 NMS stacks → 1.21.5 hashed stacks → 26.x),
+     * reflective NMS stack sentinels, and the live container stateId — whose
+     * mismatch makes the server silently DISCARD the click, a new invisible
+     * failure mode in the one routine this feedback loop exists to make
+     * observable.</p>
      */
     private void restockPotSlot() {
         BoxerSettings.Items items = settings.items();
@@ -739,66 +789,132 @@ final class BoxerImpl implements Boxer {
         if (held != null && !held.getType().isAir()) {
             return; // the pot slot is already loaded
         }
-        for (int hotbar = 0; hotbar <= 8; hotbar++) {
-            if (hotbar == items.potSlot()) {
+        // 0–8 then 9–35: hotbar reserves slide over before the backpack empties.
+        for (int invSlot = 0; invSlot <= 35; invSlot++) {
+            if (invSlot == items.potSlot()) {
                 continue;
             }
-            ItemStack candidate = inventory.getItem(hotbar);
+            ItemStack candidate = inventory.getItem(invSlot);
             if (ItemCategory.is(candidate, ItemCategory.POTION)) {
                 inventory.setItem(items.potSlot(), candidate);
-                inventory.setItem(hotbar, null);
+                inventory.setItem(invSlot, null);
                 return;
             }
         }
     }
 
     /**
-     * A splash instant-health potion, built to survive the 1.17.1 → 26.x matrix: the
-     * potion-type constant ({@code INSTANT_HEAL} → {@code HEALING} in 1.20.5) and the
-     * meta setter ({@code setBasePotionData} → {@code setBasePotionType}) both changed,
-     * so both are resolved reflectively with fallbacks. A failure degrades to a plain
-     * splash potion — still a thrown, depletable POTION, just without the stamped effect.
+     * A splash Instant Health II potion, built to survive the 1.17.1 → 26.x matrix:
+     * the potion-type constants ({@code INSTANT_HEAL} → {@code HEALING} +
+     * {@code STRONG_HEALING} in 1.20.5) and the meta setter
+     * ({@code setBasePotionData} → {@code setBasePotionType}) both changed, so both
+     * are resolved reflectively with fallbacks. A total failure degrades to a plain
+     * splash potion — still a thrown, depletable POTION — but is WARNED once per
+     * boxer: an effect-less heal supply must never ship silently.
      */
     private @NotNull ItemStack splashHealPotion() {
         ItemStack potion = new ItemStack(Material.SPLASH_POTION);
+        boolean stamped = false;
         try {
             org.bukkit.inventory.meta.ItemMeta meta = potion.getItemMeta();
             if (meta instanceof org.bukkit.inventory.meta.PotionMeta potionMeta) {
-                stampInstantHeal(potionMeta);
+                stamped = stampInstantHeal(potionMeta);
                 potion.setItemMeta(potionMeta);
             }
         } catch (Throwable versionDrift) {
             if (DEBUG) {
-                logger.info("[debug " + name + "] splash-heal stamp fell back to plain: " + versionDrift);
+                logger.info("[debug " + name + "] splash-heal stamp threw: " + versionDrift);
             }
+        }
+        if (!stamped && !potionStampWarned) {
+            potionStampWarned = true;
+            logger.warning("[" + name + "] could not stamp Instant Health II on the splash-pot"
+                    + " supply — the heal routine will throw effect-less potions on this server");
         }
         return potion;
     }
 
-    private static void stampInstantHeal(@NotNull org.bukkit.inventory.meta.PotionMeta meta)
-            throws Exception {
-        Class<?> potionType = org.bukkit.potion.PotionType.class;
-        Object heal = null;
-        for (String candidate : new String[] {"HEALING", "INSTANT_HEAL"}) {
+    /**
+     * Stamps Instant Health II onto the meta, best shape first: {@code
+     * setBasePotionType(STRONG_HEALING)} (1.20.5+), {@code setBasePotionData(new
+     * PotionData(heal, false, upgraded))} (1.9–1.20.4 — also the landing spot for
+     * 1.20.2–1.20.4, where the new setter exists but the STRONG_ constants do
+     * not), and a raw custom {@code INSTANT_HEALTH}/{@code HEAL} amplifier-1
+     * effect as the last resort. Every method lookup resolves against the PUBLIC
+     * {@link org.bukkit.inventory.meta.PotionMeta} interface — resolving against
+     * {@code meta.getClass()} lands on the package-private CraftMetaPotion and
+     * makes {@code invoke} throw IllegalAccessException on every version. Each
+     * step catches {@code Throwable}: compile-floor (1.17.1) API members removed
+     * by a newer runtime surface as LinkageErrors, not Exceptions.
+     *
+     * @return true when some instant-health payload landed on the meta
+     */
+    private static boolean stampInstantHeal(@NotNull org.bukkit.inventory.meta.PotionMeta meta) {
+        Class<org.bukkit.inventory.meta.PotionMeta> metaApi =
+                org.bukkit.inventory.meta.PotionMeta.class;
+        // 1.20.5+: the tier is its own constant; one call stamps Instant Health II.
+        org.bukkit.potion.PotionType strong = potionTypeByName("STRONG_HEALING");
+        if (strong != null) {
             try {
-                heal = potionType.getField(candidate).get(null); // enum constant / static field
-                break;
-            } catch (NoSuchFieldException notThisVersion) {
-                // try the other name
+                metaApi.getMethod("setBasePotionType", org.bukkit.potion.PotionType.class)
+                        .invoke(meta, strong);
+                return true;
+            } catch (Throwable drift) {
+                // fall through — the PotionData path may still exist
             }
         }
-        if (heal == null) {
-            return; // neither constant exists on this version — leave it plain
+        // 1.9–1.20.4: base heal escalated to tier II by PotionData(upgraded=true)
+        // (upgradable on every version that has this API; guarded regardless).
+        org.bukkit.potion.PotionType heal = potionTypeByName("HEALING", "INSTANT_HEAL");
+        if (heal != null) {
+            try {
+                Class<?> potionData = Class.forName("org.bukkit.potion.PotionData");
+                Object data = potionData.getConstructor(
+                                org.bukkit.potion.PotionType.class, boolean.class, boolean.class)
+                        .newInstance(heal, false, heal.isUpgradeable());
+                metaApi.getMethod("setBasePotionData", potionData).invoke(meta, data);
+                return true;
+            } catch (Throwable drift) {
+                // no PotionData on this runtime — fall through to the raw effect
+            }
         }
+        // Last resort: a custom effect — amplifier 1 IS tier II. The constant is
+        // HEAL through 1.20.4 and INSTANT_HEALTH from 1.20.5; addCustomEffect is
+        // stable public API everywhere.
         try {
-            meta.getClass().getMethod("setBasePotionType", potionType).invoke(meta, heal);
-            return;
-        } catch (NoSuchMethodException legacy) {
-            // pre-1.20.5: fall back to the PotionData API
+            for (String candidate : new String[] {"INSTANT_HEALTH", "HEAL"}) {
+                Object effectType = staticField(
+                        org.bukkit.potion.PotionEffectType.class, candidate);
+                if (effectType instanceof org.bukkit.potion.PotionEffectType instantHealth) {
+                    meta.addCustomEffect(
+                            new org.bukkit.potion.PotionEffect(instantHealth, 1, 1), true);
+                    return true;
+                }
+            }
+        } catch (Throwable drift) {
+            // nothing stamps on this runtime — the caller warns once
         }
-        Class<?> potionData = Class.forName("org.bukkit.potion.PotionData");
-        Object data = potionData.getConstructor(potionType).newInstance(heal);
-        meta.getClass().getMethod("setBasePotionData", potionData).invoke(meta, data);
+        return false;
+    }
+
+    /** A {@code PotionType} constant by any of its era names, or null when none exist. */
+    private static @Nullable org.bukkit.potion.PotionType potionTypeByName(String... names) {
+        for (String name : names) {
+            Object constant = staticField(org.bukkit.potion.PotionType.class, name);
+            if (constant instanceof org.bukkit.potion.PotionType type) {
+                return type;
+            }
+        }
+        return null;
+    }
+
+    /** A public static field's value by name, or null where absent/unreadable. */
+    private static @Nullable Object staticField(@NotNull Class<?> owner, @NotNull String name) {
+        try {
+            return owner.getField(name).get(null);
+        } catch (Throwable absent) {
+            return null;
+        }
     }
 
     /** Lowers one brain {@link ActionIntent} onto the action latency line. */
@@ -873,6 +989,23 @@ final class BoxerImpl implements Boxer {
                     where.getX(), where.getZ());
             physics.addVelocity(shove.x(), 0.0, shove.z());
         }
+    }
+
+    /**
+     * Cumulative server-confirmed potion launches by this boxer — a
+     * {@code ThrownPotion} spawned with the boxer as shooter, fed by
+     * {@link CombatFeedbackListener} from {@code ProjectileLaunchEvent} on the
+     * owning thread (the launch happens synchronously inside the use-item
+     * handler this boxer's own tick dispatched). Monotonic across respawns;
+     * exported through {@code Perception.CombatState}, where the heal routine
+     * diffs it against a per-throw baseline — a use-item the server swallowed
+     * is a visible non-launch it can retry instead of a phantom success.
+     */
+    private int potsLaunched;
+
+    /** A potion this boxer threw actually launched (server confirmation, owning thread). */
+    void onPotLaunched() {
+        potsLaunched++;
     }
 
     /** A hit this boxer threw landed (server confirmation, owning thread). */
@@ -1052,6 +1185,9 @@ final class BoxerImpl implements Boxer {
         this.respawnRequested = false;
         this.respawnRetryIn = 0;
         this.knockback.clear();
+        // The respawn inventory is fresh: refill the splash-pot supply even for
+        // a kitless boxer (the kit path below re-arms seeding on its own).
+        this.consumablesDirty = true;
         if (!loadout.isEmpty()) {
             this.loadoutDirty = true;
         }
@@ -1089,6 +1225,9 @@ final class BoxerImpl implements Boxer {
     public void retune(@NotNull BoxerSettings newSettings) {
         this.settings = newSettings;
         this.settingsDirty = true;
+        // A retune can enable fill-splash-pots or raise the count at runtime;
+        // seeding is idempotent, so re-arming unconditionally is safe.
+        this.consumablesDirty = true;
     }
 
     @Override

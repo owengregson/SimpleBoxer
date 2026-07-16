@@ -70,7 +70,7 @@ class ArbiterTest {
         return new Perception(
                 new Perception.SelfState(
                         0, 0, 0, Vec3d.ZERO, true, false, 1.0, 1.0,
-                        Perception.UseItemState.NONE, false),
+                        Perception.UseItemState.NONE, false, 0.1, -1),
                 null,
                 Perception.TerrainView.OPEN,
                 Perception.InventoryView.EMPTY,

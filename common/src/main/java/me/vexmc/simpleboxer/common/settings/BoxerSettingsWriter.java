@@ -68,6 +68,7 @@ public final class BoxerSettingsWriter {
         combat.set("strafe-preset", token(settings.combat().strafePreset().name()));
         combat.set("s-tap", settings.combat().sTap());
         combat.set("miss-chance", settings.combat().missChance());
+        combat.set("crit-spam", settings.critSpam().enabled());
 
         ConfigurationSection selfHeal = fresh(section, "self-heal");
         selfHeal.set("enabled", settings.selfHeal().enabled());

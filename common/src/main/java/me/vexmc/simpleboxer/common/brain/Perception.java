@@ -24,7 +24,16 @@ public record Perception(
         return target != null;
     }
 
-    /** The boxer's own kinematics and vitals. */
+    /**
+     * The boxer's own kinematics and vitals. {@code movementSpeed} is the aged
+     * movement-speed attribute snapshot ({@code PlayerTraits}: Speed/Slowness,
+     * armor and plugin modifiers — sprint modifier already stripped; vanilla
+     * base 0.1) and {@code jumpBoostAmplifier} the aged Jump Boost level
+     * ({@code -1} = none) — the same numbers the integrator runs on, so the
+     * motor stack can predict takeoff kinematics instead of guessing from
+     * velocity alone. A real client knows both via
+     * ClientboundUpdateAttributes / UpdateMobEffect.
+     */
     public record SelfState(
             double x, double y, double z,
             @NotNull Vec3d velocity,
@@ -33,7 +42,9 @@ public record Perception(
             double healthPct,
             double hungerPct,
             @NotNull UseItemState useItem,
-            boolean blocking) {
+            boolean blocking,
+            double movementSpeed,
+            int jumpBoostAmplifier) {
 
         public @NotNull Vec3d position() {
             return new Vec3d(x, y, z);
@@ -93,13 +104,21 @@ public record Perception(
                 new InventoryView(false, false, false, false, false, 0);
     }
 
-    /** Live combat timers/flags the brain needs for gating and routine triggers. */
+    /**
+     * Live combat timers/flags the brain needs for gating and routine triggers.
+     * {@code potsLaunched} is the cumulative count of splash/lingering potions
+     * the server has CONFIRMED launching for this boxer (a ThrownPotion spawn
+     * with the boxer as shooter) — monotonic, never reset, so routines diff it
+     * against a recorded baseline to tell a real throw from a use-item the
+     * server silently swallowed.
+     */
     public record CombatState(
             double attackMeter,
             boolean mentalComboActive,
-            long serverTick) {
+            long serverTick,
+            int potsLaunched) {
 
-        public static final CombatState IDLE = new CombatState(1.0, false, 0L);
+        public static final CombatState IDLE = new CombatState(1.0, false, 0L, 0);
     }
 
     /** Whether the boxer is mid-use of its held item (blocking, eating, casting). */

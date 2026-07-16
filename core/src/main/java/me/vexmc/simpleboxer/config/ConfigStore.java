@@ -152,6 +152,7 @@ public final class ConfigStore {
                 builtin.aim(), builtin.reach(), builtin.aimToleranceDegrees(), builtin.wtap(),
                 builtin.movement(), defaults.invincible(), defaults.feedHunger(),
                 defaults.invincibleMode(), defaults.death(), builtin.combat(),
-                builtin.selfHeal(), builtin.items(), defaults.hunger());
+                builtin.selfHeal(), builtin.items(), defaults.hunger(),
+                builtin.critSpam());
     }
 }

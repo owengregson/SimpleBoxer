@@ -17,49 +17,73 @@ import org.jetbrains.annotations.NotNull;
  * A Baritone-style 3D voxel A* — the pathfinder that routes a boxer around concave traps,
  * up off-line staircases, down drops, and across terrain it cannot see over. It is a
  * from-scratch reimplementation (Baritone is a client mod and cannot be bundled; its
- * {@code Movement}/{@code ActionCosts} model is used as an algorithm reference only), and it
- * keeps the <b>exact same public seam</b> as {@link LocalPathPlanner} so the motor stack is
- * untouched: {@link #route(Vec3d, Vec3d, CollisionView, int, boolean)} returns the collapsed
- * waypoint centres {@code (cellX+0.5, floorY, cellZ+0.5)}.
+ * {@code Movement}/{@code ActionCosts} model is used as an algorithm reference only). The
+ * primary seam is {@link #plan(Vec3d, Vec3d, CollisionView, int, boolean, int)}, whose
+ * {@link Route} says whether the goal cell was actually reached and at what floor level the
+ * route ends — callers can tell a real route from a dead-end breadcrumb.
+ * {@link #route(Vec3d, Vec3d, CollisionView, int, boolean)} keeps the legacy
+ * {@link LocalPathPlanner}-shaped list seam over it (waypoint centres
+ * {@code (cellX+0.5, floorY, cellZ+0.5)}).
  *
  * <p><b>Graph.</b> A node is a feet block {@code (x,y,z)} packed into a {@code long}
  * (26/12/26 bits). A cell's standable surface is snapped to real terrain via
  * {@link NavGeometry#groundHeight}/{@link NavGeometry#playerBox}/{@link NavGeometry#collides},
  * so nodes sit where a player would actually stand. Edges are one of
- * {@link MovementType}: {@code TRAVERSE}/{@code DIAGONAL} (level), {@code ASCEND} (+1 jump),
- * {@code DESCEND} (−1 step), {@code FALL} (a dynamic-Y drop to the first ground within a fall
- * cap). Costs come from {@link MoveCosts} (sprint base plus jump/fall penalties).</p>
+ * {@link MovementType}: {@code TRAVERSE}/{@code DIAGONAL} (level — including a stairwise
+ * sub-step climb the vanilla auto-step walks, see {@link NavGeometry#stairwiseWalkable}),
+ * {@code ASCEND} (+1 jump), {@code DESCEND} (−1 step), {@code FALL} (a dynamic-Y drop to the
+ * first ground within a fall cap). Costs come from {@link MoveCosts} (sprint base plus
+ * jump/fall penalties) plus a soft {@link #CLEARANCE_COST clearance surcharge}: entering a
+ * cell whose nearest obstruction is at Chebyshev distance d costs an extra
+ * {@code K·(2.5−d)/2.5} (d=1 → 0.6K, d=2 → 0.2K, else 0), so open-field routes bow a
+ * two-cell berth around obstacles while narrow corridors stay routable (finite, additive to
+ * {@code g}; the heuristic is untouched and stays an under-estimate).</p>
  *
  * <p><b>Heuristic (weighted, elevation-seeking).</b>
  * {@code h = octileHorizontal·SPRINT_ONE_BLOCK + Δy_up·JUMP_ONE_BLOCK}, with the vertical term
  * charged only when the goal is <em>above</em> the node (falling is cheap, so a downward goal
- * gets ~0 vertical term). The vertical term is what makes the search actively seek elevation
- * toward a raised target and — critically — stops the anytime {@code bestSoFar} partial from
- * stalling <em>directly under</em> an out-of-reach platform (horizontally close, a dead end).
- * For the current cardinal-only vertical moves the term is admissible; it is deliberately
- * structured as a mildly-inflated / weighted-A* term (bounded-suboptimal, favouring
- * elevation-seeking and search speed) — do not rely on strict optimality of climbing routes.</p>
+ * gets ~0 vertical term). For the current cardinal-only vertical moves the term is admissible;
+ * it is deliberately structured as a mildly-inflated / weighted-A* term (bounded-suboptimal,
+ * favouring elevation-seeking and search speed) — do not rely on strict optimality of
+ * climbing routes.</p>
  *
- * <p><b>Anytime partial.</b> The node minimising {@code h} is tracked as it is discovered; on
- * budget or bound exhaustion the route is reconstructed from that {@code bestSoFar} node (only
- * when it advanced ≥ 2 cells) instead of returning empty — so a boxer always gets a breadcrumb
- * toward the goal rather than nothing.</p>
+ * <p><b>Anytime partial.</b> On budget or bound exhaustion the route is reconstructed from
+ * the min-{@code h} node still on the OPEN frontier — where the search could have kept going
+ * (e.g. toward stairs) — rather than from any closed dead end: the heuristic's cheap vertical
+ * term otherwise parks every failed partial on the cell directly under an elevated goal. When
+ * the frontier is empty (space exhausted) the globally best node is used, and either way the
+ * partial must have advanced ≥ 2 cells or {@link Optional#empty()} is returned.</p>
  *
- * <p><b>Folia safety.</b> The search is clamped to a {@link #MAX_EXTENT} horizontal box and a
- * {@link #Y_BAND} vertical band, and every neighbour cell's column (footprint + head + fall
- * column) is gated through {@link CollisionView#isReadable} — an unreadable cell yields no edge,
- * so the search halts at the loaded/region frontier and returns a partial that lives entirely in
- * readable space. Owning-thread; deterministic (fixed neighbour order + insertion-order
- * tie-breaks).</p>
+ * <p><b>Folia safety.</b> The search is clamped to a caller-chosen horizontal box (capped at
+ * {@link #MAX_EXTENT_CAP}) and a {@link #Y_BAND} vertical band, and every neighbour cell's
+ * column (footprint + head + fall column) is gated through {@link CollisionView#isReadable} —
+ * an unreadable cell yields no edge, so the search halts at the loaded/region frontier and
+ * returns a partial that lives entirely in readable space (the clearance probes are gated the
+ * same way inside {@link NavGeometry#standableLevel}). Owning-thread; deterministic (fixed
+ * neighbour order + insertion-order tie-breaks; the frontier scan takes a strict minimum with
+ * a total key tie-break, so it is iteration-order independent).</p>
  */
 public final class BaritoneStylePlanner {
 
-    /** Half-width of the search box, in block cells, measured from the start cell. */
+    /** Default half-width of the search box, in block cells, measured from the start cell. */
     public static final int MAX_EXTENT = 10;
+    /** Hard cap on a caller-supplied search-box half-width (region-safety bound; the
+     *  {@code isReadable} column gate remains the true Folia contract either way). */
+    public static final int MAX_EXTENT_CAP = 32;
     /** Half-height of the search band, in blocks, measured from the start feet level. */
     public static final int Y_BAND = 8;
     /** Deepest drop a single FALL/DESCEND edge may cover (fall-damage-ish cap). */
     public static final int MAX_FALL = 3;
+
+    /**
+     * Clearance surcharge scale, in tick units: half a sprinted block. With the
+     * {@code (2.5−d)/2.5} ring fractions this prices a wall-adjacent cell at +1.0691
+     * ticks and a one-off cell at +0.3564 — enough that beside a 7-cell wall the
+     * one-lane-out route (two extra diagonals, +2.9524 ticks) saves more in
+     * surcharges (9×1.0691 − 10×0.3564 = 6.0584) than it spends, while a 1-wide
+     * corridor (every cell +1.0691, no alternative) stays routable.
+     */
+    static final double CLEARANCE_COST = 0.5 * MoveCosts.SPRINT_ONE_BLOCK;
 
     private static final double STEP_HEIGHT = ClientPhysics.STEP_HEIGHT; // 0.6
     private static final double MAX_JUMP_RISE = NavGeometry.MAX_JUMP_RISE; // 1.25
@@ -76,16 +100,34 @@ public final class BaritoneStylePlanner {
     }
 
     /**
-     * As {@link LocalPathPlanner#route(Vec3d, Vec3d, CollisionView, int, boolean)} — the seam is
-     * identical. Plans a route from {@code start} toward {@code goal} over 3D terrain, clamped to a
-     * {@link #MAX_EXTENT} box + {@link #Y_BAND} band and capped at {@code budget} node expansions.
-     * When {@code allowJump} is false the search refuses {@code ASCEND} edges (routes around a
-     * step-up instead of over it). Returns the collapsed waypoint breadcrumb from just-after-start
-     * to the (possibly clamped) goal, an anytime partial toward it, or {@link Optional#empty()}
-     * when nothing better than the start cell is reachable.
+     * A self-describing planning result: the waypoint breadcrumb, whether the search
+     * actually REACHED the (clamped) goal cell ({@code complete}), and the floor Y the
+     * route's final cell stands on ({@code endFloorY}) — enough for a caller to refuse
+     * a dead-end partial that gains no elevation toward a raised target.
+     */
+    public record Route(@NotNull List<Vec3d> waypoints, boolean complete, double endFloorY) {}
+
+    /**
+     * The legacy list seam ({@link LocalPathPlanner}-shaped): the waypoints of
+     * {@link #plan} at the default {@link #MAX_EXTENT}, complete or partial alike.
      */
     public @NotNull Optional<List<Vec3d>> route(@NotNull Vec3d start, @NotNull Vec3d goal,
             @NotNull CollisionView world, int budget, boolean allowJump) {
+        return plan(start, goal, world, budget, allowJump, MAX_EXTENT).map(Route::waypoints);
+    }
+
+    /**
+     * Plans a route from {@code start} toward {@code goal} over 3D terrain, clamped to an
+     * {@code extent}-cell box (capped at {@link #MAX_EXTENT_CAP}) + {@link #Y_BAND} band and
+     * capped at {@code budget} node expansions. When {@code allowJump} is false the search
+     * refuses {@code ASCEND} edges (routes around a step-up instead of over it) — stairwise
+     * sub-step climbs are TRAVERSE and stay legal. Returns the collapsed waypoint breadcrumb
+     * from just-after-start to the (possibly clamped) goal, an anytime partial toward it, or
+     * {@link Optional#empty()} when nothing better than the start cell is reachable.
+     */
+    public @NotNull Optional<Route> plan(@NotNull Vec3d start, @NotNull Vec3d goal,
+            @NotNull CollisionView world, int budget, boolean allowJump, int extent) {
+        int maxExtent = clamp(extent, 1, MAX_EXTENT_CAP);
         int sx = floor(start.x());
         int sz = floor(start.z());
 
@@ -96,8 +138,8 @@ public final class BaritoneStylePlanner {
         int sy = floor(startGround);
 
         // Clamp the goal into the box + band so a far/raised target still yields a breadcrumb.
-        int gx = clamp(floor(goal.x()), sx - MAX_EXTENT, sx + MAX_EXTENT);
-        int gz = clamp(floor(goal.z()), sz - MAX_EXTENT, sz + MAX_EXTENT);
+        int gx = clamp(floor(goal.x()), sx - maxExtent, sx + maxExtent);
+        int gz = clamp(floor(goal.z()), sz - maxExtent, sz + maxExtent);
         double goalGround = NavGeometry.groundHeight(world, gx + 0.5, gz + 0.5, goal.y());
         int gy = clamp(Double.isNaN(goalGround) ? floor(goal.y()) : floor(goalGround),
                 sy - Y_BAND, sy + Y_BAND);
@@ -106,12 +148,14 @@ public final class BaritoneStylePlanner {
         long goalKey = key(gx, gy, gz);
 
         if (startKey == goalKey) {
-            return Optional.of(List.of(new Vec3d(gx + 0.5, startGround, gz + 0.5)));
+            return Optional.of(new Route(
+                    List.of(new Vec3d(gx + 0.5, startGround, gz + 0.5)), true, startGround));
         }
 
         Map<Long, Double> gScore = new HashMap<>();
         Map<Long, Node> nodes = new HashMap<>();
         Map<Long, Long> cameFrom = new HashMap<>();
+        Map<Long, Double> clearance = new HashMap<>();
         Set<Long> closed = new HashSet<>();
         PriorityQueue<Frontier> open = new PriorityQueue<>((a, b) -> {
             int byF = Double.compare(a.f, b.f);
@@ -135,7 +179,8 @@ public final class BaritoneStylePlanner {
                 continue; // a stale duplicate left over from a decrease-key
             }
             if (curKey == goalKey) {
-                return Optional.of(reconstruct(nodes, cameFrom, curKey));
+                return Optional.of(new Route(reconstruct(nodes, cameFrom, curKey), true,
+                        nodes.get(curKey).floor));
             }
             if (++expansions > budget) {
                 break; // spent the tick's budget — fall through to the bestSoFar partial
@@ -149,7 +194,7 @@ public final class BaritoneStylePlanner {
                 int dz = step[1];
                 int nx = cur.x + dx;
                 int nz = cur.z + dz;
-                if (Math.abs(nx - sx) > MAX_EXTENT || Math.abs(nz - sz) > MAX_EXTENT) {
+                if (Math.abs(nx - sx) > maxExtent || Math.abs(nz - sz) > maxExtent) {
                     continue; // outside the bounded (region-safe) search box
                 }
                 // Folia gate: the neighbour column (fall column + head clearance) must be readable
@@ -175,12 +220,21 @@ public final class BaritoneStylePlanner {
                 MovementType type;
                 double edge;
                 if (dy > STEP_HEIGHT + EPS) {
-                    // A climb: needs a jump, cardinal only, and within a single-block rise.
-                    if (!allowJump || diagonal || dy > MAX_JUMP_RISE + EPS) {
+                    if (!diagonal && dy <= MAX_JUMP_RISE + EPS
+                            && NavGeometry.stairwiseWalkable(world, nx, nz, dx, dz,
+                                    cur.floor, nGround)) {
+                        // A real staircase block: the vanilla auto-step climbs its 0.5
+                        // lips without a jump — a flat traverse even for the walk-only
+                        // pass (footprint-max ground used to read it as a +1.0 ASCEND).
+                        type = MovementType.TRAVERSE;
+                        edge = MoveCosts.SPRINT_ONE_BLOCK;
+                    } else if (!allowJump || diagonal || dy > MAX_JUMP_RISE + EPS) {
                         continue;
+                    } else {
+                        // A climb: needs a jump, cardinal only, within a single-block rise.
+                        type = MovementType.ASCEND;
+                        edge = MoveCosts.SPRINT_ONE_BLOCK + MoveCosts.JUMP_ONE_BLOCK;
                     }
-                    type = MovementType.ASCEND;
-                    edge = MoveCosts.SPRINT_ONE_BLOCK + MoveCosts.JUMP_ONE_BLOCK;
                 } else if (dy < -STEP_HEIGHT - EPS) {
                     // A drop: cardinal only, within the fall cap.
                     double drop = -dy;
@@ -214,7 +268,14 @@ public final class BaritoneStylePlanner {
                 if (closed.contains(nKey)) {
                     continue;
                 }
-                double tentative = curG + edge;
+                // Soft clearance surcharge (memoized): a finite, ≥0 addition to g only,
+                // so h stays an under-estimate and corridors never close.
+                Double berth = clearance.get(nKey);
+                if (berth == null) {
+                    berth = CLEARANCE_COST * NavGeometry.clearanceFraction(world, nx, nz, nGround);
+                    clearance.put(nKey, berth);
+                }
+                double tentative = curG + edge + berth;
                 Double known = gScore.get(nKey);
                 if (known == null || tentative < known - EPS) {
                     gScore.put(nKey, tentative);
@@ -230,13 +291,34 @@ public final class BaritoneStylePlanner {
             }
         }
 
-        // Anytime fallback: hand back the closest-approach partial, but only if it actually
-        // advanced (≥ 2 cells of Chebyshev progress) — otherwise let the caller steer reactively.
-        if (bestKey != startKey) {
-            Node best = nodes.get(bestKey);
+        // Anytime fallback: prefer the min-h node still on the OPEN frontier — where the
+        // search could have kept going (e.g. toward the stairs) — over a closed dead end;
+        // the heuristic's cheap vertical term otherwise parks every failed partial on the
+        // cell directly under an elevated goal. Strict minimum with a total key tie-break
+        // keeps this deterministic regardless of heap iteration order. Fall back to the
+        // globally best node when the frontier is empty, and keep the ≥2-cell anti-jitter bar.
+        long partialKey = startKey;
+        double partialH = Double.MAX_VALUE;
+        for (Frontier f : open) {
+            if (closed.contains(f.key)) {
+                continue; // a stale duplicate of an already-expanded node
+            }
+            Node n = nodes.get(f.key);
+            double h = heuristic(n.x, n.y, n.z, gx, gy, gz);
+            if (h < partialH - EPS || (h < partialH + EPS && f.key < partialKey)) {
+                partialH = h;
+                partialKey = f.key;
+            }
+        }
+        if (partialKey == startKey) {
+            partialKey = bestKey;
+        }
+        if (partialKey != startKey) {
+            Node best = nodes.get(partialKey);
             int advanced = Math.max(Math.abs(best.x - sx), Math.abs(best.z - sz));
             if (advanced >= 2) {
-                return Optional.of(reconstruct(nodes, cameFrom, bestKey));
+                return Optional.of(new Route(reconstruct(nodes, cameFrom, partialKey), false,
+                        best.floor));
             }
         }
         return Optional.empty();

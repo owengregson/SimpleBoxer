@@ -52,11 +52,35 @@ public final class BrainMemory {
     private int posCursor;
     private boolean posSeeded;
 
-    /* A cached local path the navigate goal follows, and its plan bookkeeping. */
+    /* A cached local path the navigate goal follows, and its plan bookkeeping.
+     * lastPlanTick is in decision ticks (motorTick units) and throttles the
+     * heavyweight elevation planner; lastGoalCell is the target's block cell at
+     * plan time. */
     public @Nullable List<Vec3d> path;
     public int pathCursor;
     public long lastPlanTick = Long.MIN_VALUE;
     public long lastGoalCell = Long.MIN_VALUE;
+
+    /* Elevation latch: while set, the follower holds a committed climbing route
+     * across target cell changes (replan-while-following swaps it for a better
+     * plan when one exists) so orbit/pocket gates cannot dissolve a climb
+     * mid-stairs. climbGoalY is the target level the latch releases at. */
+    public boolean climbLatch;
+    public double climbGoalY;
+
+    /* Ticks spent on the CURRENT waypoint without advancing the cursor — the
+     * follower's geometric-invalidation clock (a waypoint the boxer cannot reach
+     * within the stall bound means the route no longer matches the world or the
+     * boxer was knocked hopelessly off it). Zeroed on adopt and on every cursor
+     * advance. */
+    public int waypointTicks;
+
+    /* Scheduled-takeoff cue from the route follower: the step-face distance
+     * (blocks of box travel) and rise of the next ASCEND waypoint, NaN/0 when
+     * none. Reset every decision tick by the heading resolver; consumed by
+     * ProactiveJump when its geometric face probe misses. */
+    public double routeStepFace = Double.NaN;
+    public double routeStepRise;
 
     /* Per-routine scratch, lazily allocated by routine id. */
     private final Map<String, int[]> intScratch = new HashMap<>();

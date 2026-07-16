@@ -184,10 +184,11 @@ final class SettingsRegistry {
                 "§8instant-health splash potions the boxer",
                 "§8throws to heal — and can run out of."));
         d.add(SettingDescriptor.integer("splash-pot-count", SettingCategory.POTIONS, "Splash pot count",
-                Material.BREWING_STAND, "", s -> s.items().splashPotCount(), 1, 3, 0, 9,
+                Material.BREWING_STAND, "", s -> s.items().splashPotCount(), 1, 5, 0, 36,
                 (s, v) -> s.withItems(items(s).splashPotCount((int) Math.round(v))),
-                "§8How many splash potions to seed (0-9),",
-                "§8when Fill splash pots is on.")
+                "§8How many splash potions to seed (0-36),",
+                "§8when Fill splash pots is on — counts past",
+                "§8the hotbar overflow into the main inventory.")
                 .requires("Fill splash pots", s -> s.items().fillSplashPots()));
 
         /* ---- Survival ---------------------------------------------------- */

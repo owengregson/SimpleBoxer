@@ -125,6 +125,10 @@ defaults:
     s-tap: false
     # Fraction of clicks intentionally aimed off-target (0-1).
     miss-chance: 0.0
+    # Ceiling crit-spam: under a roof low enough to clip the jump arc, hop,
+    # drop sprint on the descent, and hold attacks to the fall so landed hits
+    # crit. Pays off most on OCM-style pinned attack meters.
+    crit-spam: false
   # Splash-potion self-heal (mortal boxers only).
   self-heal:
     enabled: false
@@ -152,7 +156,8 @@ defaults:
     block-slot: 4
     # Seed the hotbar with a FINITE supply of instant-health splash potions the
     # boxer throws to heal (needs self-heal enabled). The supply depletes as it
-    # throws and can genuinely run out. splash-pot-count is how many (0-9).
+    # throws and can genuinely run out. splash-pot-count is how many (0-36;
+    # counts past the hotbar overflow into the main inventory).
     fill-splash-pots: false
     splash-pot-count: 0
 

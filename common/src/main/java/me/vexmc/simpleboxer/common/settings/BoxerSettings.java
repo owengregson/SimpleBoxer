@@ -33,7 +33,8 @@ public record BoxerSettings(
         @NotNull Combat combat,
         @NotNull SelfHeal selfHeal,
         @NotNull Items items,
-        @NotNull Hunger hunger) {
+        @NotNull Hunger hunger,
+        @NotNull CritSpam critSpam) {
 
     /**
      * W-tap behavior: after a landed hit, release forward (dropping sprint)
@@ -233,9 +234,9 @@ public record BoxerSettings(
             requireHotbar("potSlot", potSlot);
             requireHotbar("foodSlot", foodSlot);
             requireHotbar("blockSlot", blockSlot);
-            if (splashPotCount < 0 || splashPotCount > 9) {
+            if (splashPotCount < 0 || splashPotCount > 36) {
                 throw new IllegalArgumentException(
-                        "splashPotCount must be a hotbar-sized count in [0,9]: " + splashPotCount);
+                        "splashPotCount must fit a player inventory in [0,36]: " + splashPotCount);
             }
         }
 
@@ -262,6 +263,26 @@ public record BoxerSettings(
         }
     }
 
+    /**
+     * Ceiling crit-spam: under a crit-eligible roof (headroom low enough to clip
+     * the 0.42 jump arc early) an engaged boxer rides a pulsed bonk-hop cycle,
+     * drops sprint for the descending click window (the NMS crit gate demands
+     * {@code !isSprinting} — OCM included), and holds its attacks to the
+     * fallDistance-positive descent. Pure decision-layer: every packet it rides
+     * (move, input, sprint command, attack) is the same genuine wire a real
+     * crit-spammer produces. Pays off most under OCM's pinned-full attack meter;
+     * on vanilla 1.9+ meters the descending hits still only crit when the meter
+     * happens to be recharged. Stored beside the {@code Combat} techniques in
+     * config ({@code combat.crit-spam}) but kept out of the {@code Combat}
+     * record so its positional shape — and every GUI field-swapper built on it —
+     * stays untouched.
+     */
+    public record CritSpam(boolean enabled) {
+
+        public static final CritSpam OFF = new CritSpam(false);
+        public static final CritSpam ON = new CritSpam(true);
+    }
+
     public static final BoxerSettings DEFAULTS = new BoxerSettings(
             0,
             8.0,
@@ -278,7 +299,8 @@ public record BoxerSettings(
             Combat.OFF,
             SelfHeal.OFF,
             Items.DEFAULT,
-            Hunger.DEFAULT);
+            Hunger.DEFAULT,
+            CritSpam.OFF);
 
     public BoxerSettings {
         if (pingMs < 0 || pingMs > 2000) {
@@ -294,101 +316,107 @@ public record BoxerSettings(
     }
 
     /* Wither-style copies for runtime tuning (/boxer set …). Every wither
-     * threads the six rework sub-records through unchanged. */
+     * threads the seven rework sub-records through unchanged. */
 
     public @NotNull BoxerSettings withPingMs(int newPingMs) {
         return new BoxerSettings(newPingMs, cps, clickJitter, aim, reach, aimToleranceDegrees,
                 wtap, movement, invincible, feedHunger,
-                invincibleMode, death, combat, selfHeal, items, hunger);
+                invincibleMode, death, combat, selfHeal, items, hunger, critSpam);
     }
 
     public @NotNull BoxerSettings withCps(double newCps) {
         return new BoxerSettings(pingMs, newCps, clickJitter, aim, reach, aimToleranceDegrees,
                 wtap, movement, invincible, feedHunger,
-                invincibleMode, death, combat, selfHeal, items, hunger);
+                invincibleMode, death, combat, selfHeal, items, hunger, critSpam);
     }
 
     public @NotNull BoxerSettings withClickJitter(double newClickJitter) {
         return new BoxerSettings(pingMs, cps, newClickJitter, aim, reach, aimToleranceDegrees,
                 wtap, movement, invincible, feedHunger,
-                invincibleMode, death, combat, selfHeal, items, hunger);
+                invincibleMode, death, combat, selfHeal, items, hunger, critSpam);
     }
 
     public @NotNull BoxerSettings withAimToleranceDegrees(double newAimToleranceDegrees) {
         return new BoxerSettings(pingMs, cps, clickJitter, aim, reach, newAimToleranceDegrees,
                 wtap, movement, invincible, feedHunger,
-                invincibleMode, death, combat, selfHeal, items, hunger);
+                invincibleMode, death, combat, selfHeal, items, hunger, critSpam);
     }
 
     public @NotNull BoxerSettings withFeedHunger(boolean newFeedHunger) {
         return new BoxerSettings(pingMs, cps, clickJitter, aim, reach, aimToleranceDegrees,
                 wtap, movement, invincible, newFeedHunger,
-                invincibleMode, death, combat, selfHeal, items, hunger);
+                invincibleMode, death, combat, selfHeal, items, hunger, critSpam);
     }
 
     public @NotNull BoxerSettings withAim(@NotNull AimParams newAim) {
         return new BoxerSettings(pingMs, cps, clickJitter, newAim, reach, aimToleranceDegrees,
                 wtap, movement, invincible, feedHunger,
-                invincibleMode, death, combat, selfHeal, items, hunger);
+                invincibleMode, death, combat, selfHeal, items, hunger, critSpam);
     }
 
     public @NotNull BoxerSettings withReach(double newReach) {
         return new BoxerSettings(pingMs, cps, clickJitter, aim, newReach, aimToleranceDegrees,
                 wtap, movement, invincible, feedHunger,
-                invincibleMode, death, combat, selfHeal, items, hunger);
+                invincibleMode, death, combat, selfHeal, items, hunger, critSpam);
     }
 
     public @NotNull BoxerSettings withWtap(@NotNull WTap newWtap) {
         return new BoxerSettings(pingMs, cps, clickJitter, aim, reach, aimToleranceDegrees,
                 newWtap, movement, invincible, feedHunger,
-                invincibleMode, death, combat, selfHeal, items, hunger);
+                invincibleMode, death, combat, selfHeal, items, hunger, critSpam);
     }
 
     public @NotNull BoxerSettings withMovement(@NotNull Movement newMovement) {
         return new BoxerSettings(pingMs, cps, clickJitter, aim, reach, aimToleranceDegrees,
                 wtap, newMovement, invincible, feedHunger,
-                invincibleMode, death, combat, selfHeal, items, hunger);
+                invincibleMode, death, combat, selfHeal, items, hunger, critSpam);
     }
 
     public @NotNull BoxerSettings withInvincible(boolean newInvincible) {
         return new BoxerSettings(pingMs, cps, clickJitter, aim, reach, aimToleranceDegrees,
                 wtap, movement, newInvincible, feedHunger,
-                invincibleMode, death, combat, selfHeal, items, hunger);
+                invincibleMode, death, combat, selfHeal, items, hunger, critSpam);
     }
 
     public @NotNull BoxerSettings withInvincibleMode(@NotNull InvincibleMode newMode) {
         return new BoxerSettings(pingMs, cps, clickJitter, aim, reach, aimToleranceDegrees,
                 wtap, movement, invincible, feedHunger,
-                newMode, death, combat, selfHeal, items, hunger);
+                newMode, death, combat, selfHeal, items, hunger, critSpam);
     }
 
     public @NotNull BoxerSettings withDeath(@NotNull Death newDeath) {
         return new BoxerSettings(pingMs, cps, clickJitter, aim, reach, aimToleranceDegrees,
                 wtap, movement, invincible, feedHunger,
-                invincibleMode, newDeath, combat, selfHeal, items, hunger);
+                invincibleMode, newDeath, combat, selfHeal, items, hunger, critSpam);
     }
 
     public @NotNull BoxerSettings withCombat(@NotNull Combat newCombat) {
         return new BoxerSettings(pingMs, cps, clickJitter, aim, reach, aimToleranceDegrees,
                 wtap, movement, invincible, feedHunger,
-                invincibleMode, death, newCombat, selfHeal, items, hunger);
+                invincibleMode, death, newCombat, selfHeal, items, hunger, critSpam);
     }
 
     public @NotNull BoxerSettings withSelfHeal(@NotNull SelfHeal newSelfHeal) {
         return new BoxerSettings(pingMs, cps, clickJitter, aim, reach, aimToleranceDegrees,
                 wtap, movement, invincible, feedHunger,
-                invincibleMode, death, combat, newSelfHeal, items, hunger);
+                invincibleMode, death, combat, newSelfHeal, items, hunger, critSpam);
     }
 
     public @NotNull BoxerSettings withItems(@NotNull Items newItems) {
         return new BoxerSettings(pingMs, cps, clickJitter, aim, reach, aimToleranceDegrees,
                 wtap, movement, invincible, feedHunger,
-                invincibleMode, death, combat, selfHeal, newItems, hunger);
+                invincibleMode, death, combat, selfHeal, newItems, hunger, critSpam);
     }
 
     public @NotNull BoxerSettings withHunger(@NotNull Hunger newHunger) {
         return new BoxerSettings(pingMs, cps, clickJitter, aim, reach, aimToleranceDegrees,
                 wtap, movement, invincible, feedHunger,
-                invincibleMode, death, combat, selfHeal, items, newHunger);
+                invincibleMode, death, combat, selfHeal, items, newHunger, critSpam);
+    }
+
+    public @NotNull BoxerSettings withCritSpam(@NotNull CritSpam newCritSpam) {
+        return new BoxerSettings(pingMs, cps, clickJitter, aim, reach, aimToleranceDegrees,
+                wtap, movement, invincible, feedHunger,
+                invincibleMode, death, combat, selfHeal, items, hunger, newCritSpam);
     }
 }

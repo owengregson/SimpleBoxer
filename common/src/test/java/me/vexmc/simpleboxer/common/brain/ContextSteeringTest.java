@@ -23,7 +23,7 @@ class ContextSteeringTest {
     private static Perception perceptionAt(double x, double y, double z, Vec3d velocity) {
         Perception.SelfState self = new Perception.SelfState(
                 x, y, z, velocity, true, false, 1.0, 1.0,
-                Perception.UseItemState.NONE, false);
+                Perception.UseItemState.NONE, false, 0.1, -1);
         return new Perception(self, null, Perception.TerrainView.OPEN,
                 Perception.InventoryView.EMPTY, Perception.CombatState.IDLE, 0);
     }
@@ -122,5 +122,80 @@ class ContextSteeringTest {
 
         assertTrue(heading.isStill(), "no desired direction should hold position");
         assertEquals(MoveHeading.STILL, heading);
+    }
+
+    // --- 0.7.0: lateral clearance (berth) -------------------------------------
+
+    /** Like {@link #perceptionAt} but with a live target {@code dist} blocks east. */
+    private static Perception perceptionWithTarget(double x, double y, double z, Vec3d velocity,
+            double targetX, double targetZ) {
+        Perception.SelfState self = new Perception.SelfState(
+                x, y, z, velocity, true, false, 1.0, 1.0,
+                Perception.UseItemState.NONE, false, 0.1, -1);
+        double dx = targetX - x;
+        double dz = targetZ - z;
+        double dist = Math.sqrt(dx * dx + dz * dz);
+        Perception.TargetState target = new Perception.TargetState(
+                targetX, y, targetZ, y + 1.62, Vec3d.ZERO, 0.0, 0.0, 0.0, dist, false);
+        return new Perception(self, target, Perception.TerrainView.OPEN,
+                Perception.InventoryView.EMPTY, Perception.CombatState.IDLE, 0);
+    }
+
+    @Test
+    void parallelWallBowsTheHeadingOut() {
+        // Hugging a 2-tall wall at a 0.5 gap, desired parallel: E scores 1−0.45,
+        // the 45° bow-out cos45−0.1 = 0.607 — the bow-out wins (see the lateral
+        // penalty javadoc for the arithmetic). It bows AWAY from the wall (south)
+        // and keeps real progress, at full speed (berth never throttles).
+        FakeWorld world = FakeWorld.floorAt(64).wall(-5, 64, 1, 5, 65, 1);
+        Perception p = perceptionAt(0.5, 64, 0.5, EAST.scale(0.28));
+
+        MoveHeading heading = steering.steer(p, EAST, world);
+
+        double dot = heading.dirWorld().normalized().dot(EAST);
+        assertTrue(dot < 0.75, "the hug lane must deflect (got dot=" + dot + ")");
+        assertTrue(dot > 0.5, "but keep making progress (got dot=" + dot + ")");
+        assertTrue(heading.dirWorld().z() < 0.0, "bows AWAY from the wall (south)");
+        assertEquals(1.0, heading.speedScale(), 1.0E-9, "lateral shaping must not throttle");
+    }
+
+    @Test
+    void wellClearOfTheWallHoldsTheLine() {
+        // At a 2.5-block gap both lateral bands are clear — travel re-parallels.
+        FakeWorld world = FakeWorld.floorAt(64).wall(-5, 64, 1, 5, 65, 1);
+        Perception p = perceptionAt(0.5, 64, -1.5, EAST.scale(0.28));
+
+        MoveHeading heading = steering.steer(p, EAST, world);
+
+        assertTrue(heading.dirWorld().normalized().dot(EAST) > 0.99,
+                "clear of the berth band the line holds");
+    }
+
+    @Test
+    void corridorRunsStraightAtFullSpeed() {
+        // Both sides mark every open candidate (0.45 × 2); the normalization floor
+        // removes it, so the corridor line scores 1.0 and never slows.
+        FakeWorld world = FakeWorld.floorAt(64)
+                .wall(-5, 64, 1, 5, 65, 1)
+                .wall(-5, 64, -1, 5, 65, -1);
+        Perception p = perceptionAt(0.5, 64, 0.5, EAST.scale(0.28));
+
+        MoveHeading heading = steering.steer(p, EAST, world);
+
+        assertTrue(heading.dirWorld().normalized().dot(EAST) > 0.99, "corridor: hold the line");
+        assertEquals(1.0, heading.speedScale(), 1.0E-9, "normalized lateral must not throttle");
+    }
+
+    @Test
+    void meleePocketKeepsRangeDisciplineOverBerth() {
+        // A target 3 blocks out (inside the 4.0 exemption): berth switches off —
+        // orbiting a cornered opponent must still hug the wall.
+        FakeWorld world = FakeWorld.floorAt(64).wall(-5, 64, 1, 5, 65, 1);
+        Perception p = perceptionWithTarget(0.5, 64, 0.5, EAST.scale(0.28), 3.5, 0.5);
+
+        MoveHeading heading = steering.steer(p, EAST, world);
+
+        assertTrue(heading.dirWorld().normalized().dot(EAST) > 0.99,
+                "inside the pocket the hug is correct (range discipline)");
     }
 }

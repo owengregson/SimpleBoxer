@@ -168,4 +168,48 @@ class BoxerSettingsParserTest {
         assertTrue(DifficultyPresets.SWEAT.selfHeal().enabled());
         assertTrue(DifficultyPresets.SWEAT.hunger().natural());
     }
+
+    @Test
+    void splashPotCountSpansTheWholeInventory() {
+        // 36 — a full player inventory — parses clean; 37 warns and keeps the base.
+        List<String> warnings = new ArrayList<>();
+        BoxerSettings parsed = BoxerSettingsParser.parse(yaml("""
+                items:
+                  fill-splash-pots: true
+                  splash-pot-count: 36
+                """), BoxerSettings.DEFAULTS, warnings::add);
+        assertEquals(36, parsed.items().splashPotCount(), "a whole-inventory supply parses");
+        assertTrue(parsed.items().fillSplashPots());
+        assertTrue(warnings.isEmpty());
+
+        BoxerSettings rejected = BoxerSettingsParser.parse(yaml("""
+                items:
+                  splash-pot-count: 37
+                """), BoxerSettings.DEFAULTS, warnings::add);
+        assertEquals(BoxerSettings.DEFAULTS.items().splashPotCount(),
+                rejected.items().splashPotCount(), "37 exceeds a player inventory");
+        assertEquals(1, warnings.size());
+    }
+
+    @Test
+    void critSpamReadsFromTheCombatSection() {
+        BoxerSettings parsed = BoxerSettingsParser.parse(yaml("""
+                combat:
+                  crit-spam: true
+                """), BoxerSettings.DEFAULTS, ignored -> {});
+        assertTrue(parsed.critSpam().enabled(), "combat.crit-spam reads through");
+        assertFalse(BoxerSettings.DEFAULTS.critSpam().enabled(), "off by default");
+    }
+
+    @Test
+    void critSpamPresetDefaults() {
+        // Only the sweat showcase crit-spams out of the box; the classic ladder
+        // stays a stable calibration fixture set.
+        assertTrue(DifficultyPresets.SWEAT.critSpam().enabled());
+        for (String tier : new String[] {"dummy", "easy", "medium", "hard", "expert", "aimbot"}) {
+            BoxerSettings preset = DifficultyPresets.byName(tier);
+            assertNotNull(preset);
+            assertFalse(preset.critSpam().enabled(), tier + " does not crit-spam by default");
+        }
+    }
 }

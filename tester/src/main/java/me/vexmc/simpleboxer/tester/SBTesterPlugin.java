@@ -14,6 +14,7 @@ import me.vexmc.simpleboxer.tester.suite.InventorySuite;
 import me.vexmc.simpleboxer.tester.suite.LatencySuite;
 import me.vexmc.simpleboxer.tester.suite.MovementSuite;
 import me.vexmc.simpleboxer.tester.suite.NavigationSuite;
+import me.vexmc.simpleboxer.tester.suite.PotionSuite;
 import me.vexmc.simpleboxer.tester.suite.SpawnSuite;
 import org.bukkit.plugin.java.JavaPlugin;
 
@@ -73,6 +74,7 @@ public final class SBTesterPlugin extends JavaPlugin {
             suite.addAll(NavigationSuite.tests());
             suite.addAll(LatencySuite.tests());
             suite.addAll(InventorySuite.tests(simpleBoxer));
+            suite.addAll(PotionSuite.tests(this));
             suite.addAll(CommandSuite.tests(simpleBoxer));
             new TestHarness(this, scheduling).run(suite);
         });
