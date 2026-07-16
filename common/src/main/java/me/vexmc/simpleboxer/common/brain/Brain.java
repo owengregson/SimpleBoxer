@@ -469,7 +469,15 @@ public final class Brain {
         }
         Vec3d self = p.self().position();
         Vec3d waypoint = memory.path.get(memory.pathCursor);
-        if (self.subtract(waypoint).horizontalDistanceSqr() < WAYPOINT_REACHED_SQ) {
+        // A waypoint is a FLOOR cell: it is consumed only once the boxer STANDS on
+        // it — grounded, feet within an auto-step of its level. Horizontal proximity
+        // alone must not advance the cursor: a boxer under a platform passes within
+        // a block of every elevated waypoint above it (eating the whole climbing
+        // tail from the floor), and a mid-jump flyby would redirect the heading into
+        // the next riser's face before the feet ever land on this one.
+        if (self.subtract(waypoint).horizontalDistanceSqr() < WAYPOINT_REACHED_SQ
+                && p.self().onGround()
+                && Math.abs(self.y() - waypoint.y()) <= ClientPhysics.STEP_HEIGHT + 1.0E-6) {
             memory.pathCursor++;
             memory.waypointTicks = 0;
             if (memory.pathCursor >= memory.path.size()) {

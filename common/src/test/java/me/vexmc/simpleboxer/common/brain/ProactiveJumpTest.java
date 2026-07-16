@@ -173,12 +173,16 @@ class ProactiveJumpTest {
 
     @Test
     void doesNotHopOntoAThinLipOverAChasm() {
-        // A 0.4-thick lip (rise 1.0) at the END of the platform, void beyond and
+        // A 0.3-thick lip (rise 1.0) at the END of the platform, void beyond and
         // below: the landing probe one block past the face finds no ground within
-        // 2 blocks — never launch toward a chasm.
+        // 2 blocks — never launch toward a chasm. The probe box's trailing edge
+        // sits at face + 1.0 − width ≈ 3.4, so the lip must end a real margin
+        // short of it (0.1 here) — a lip ending exactly at 3.4 is a zero-margin
+        // flush fit that flips on the promoted width's 2.4e-8 and the face
+        // probe's ≤ 0.00078 bisection tolerance.
         CollisionView world = FakeWorld.empty()
                 .box(new Box(-3.0, 63.0, -1.0, 3.0, 64.0, 2.0))
-                .box(new Box(3.0, 64.0, 0.0, 3.4, 65.0, 1.0));
+                .box(new Box(3.0, 64.0, 0.0, 3.3, 65.0, 1.0));
         assertEquals(JumpHint.NONE, jump.evaluate(
                 approaching(0.90, 0.15321675427484091, 0.1), eastward(), true, world, mem()));
     }
@@ -234,12 +238,20 @@ class ProactiveJumpTest {
      * Drives the REAL integrator at the trigger's command from a standing start
      * until the boxer stands on the step top. A face-press (horizontal collision
      * on any tick) fails immediately — the pre-fix trigger face-pressed at every
-     * sprint speed because it fired below the window.
+     * sprint speed because it fired below the window. The drive runs due South at
+     * yaw 0°, the one heading whose input trig is exact (sin 0 = 0.0, cos 0 = 1.0),
+     * so the cross axis carries a TRUE zero: the sim's collision flags compare
+     * exactly, and a residual sub-epsilon cross-axis velocity (any other yaw leaves
+     * ~1e-17 from the inexact sin/cos) reads as a horizontal collision against the
+     * sweep's 1e-7 clamp on every tick near geometry — where a vanilla client's
+     * {@code Mth.equal} flag tolerance (1e-5) would not flag it.
      */
     private void driveAndClear(double walkSpeed, FakeWorld world) {
         ClientPhysics phys = new ClientPhysics(0.0, 64.0, 0.0);
         phys.setWalkSpeed(walkSpeed);
         BrainMemory mem = mem();
+        // +Z heading (unit south), matching the yaw-0° drive below.
+        MoveHeading south = new MoveHeading(new Vec3d(0.0, 0.0, 1.0));
         boolean fired = false;
         for (int tick = 0; tick < 80; tick++) {
             SelfState self = new SelfState(phys.x(), phys.y(), phys.z(), phys.velocity(),
@@ -247,10 +259,9 @@ class ProactiveJumpTest {
                     1.0, 1.0, UseItemState.NONE, false, walkSpeed, -1);
             Perception p = new Perception(self, null, TerrainView.OPEN, InventoryView.EMPTY,
                     CombatState.IDLE, 0);
-            JumpHint hint = jump.evaluate(p, eastward(), true, world, mem);
+            JumpHint hint = jump.evaluate(p, south, true, world, mem);
             fired |= hint == JumpHint.JUMP;
-            // Yaw −90° faces +X: the sprint-jump push and the forward key drive due East.
-            phys.step(new MoveInput(1.0, 0.0, hint == JumpHint.JUMP, true, false), -90.0f, world);
+            phys.step(new MoveInput(1.0, 0.0, hint == JumpHint.JUMP, true, false), 0.0f, world);
             assertFalse(phys.horizontalCollision(),
                     "the takeoff-window jump must never press the step face (tick " + tick + ")");
             if (phys.onGround() && Math.abs(phys.y() - 65.0) < 1.0E-9) {
@@ -263,13 +274,13 @@ class ProactiveJumpTest {
 
     @Test
     void plainSprintClearsAOneBlockStepCleanly() {
-        driveAndClear(0.1, FakeWorld.floorAt(64).wall(6, 64, 0, 9, 64, 0));
+        driveAndClear(0.1, FakeWorld.floorAt(64).wall(0, 64, 6, 0, 64, 9));
     }
 
     @Test
     void speedTwoSprintClearsAOneBlockStepCleanly() {
         // Speed II: the stride outruns the window width, so this also exercises the
         // early-fire path end-to-end.
-        driveAndClear(0.14, FakeWorld.floorAt(64).wall(8, 64, 0, 11, 64, 0));
+        driveAndClear(0.14, FakeWorld.floorAt(64).wall(0, 64, 8, 0, 64, 11));
     }
 }
