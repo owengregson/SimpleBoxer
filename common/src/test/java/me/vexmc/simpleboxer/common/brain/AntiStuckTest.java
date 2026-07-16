@@ -20,7 +20,7 @@ class AntiStuckTest {
     private static Perception perception(double x, double y, double z,
             boolean hasTarget, boolean hcol) {
         SelfState self = new SelfState(x, y, z, Vec3d.ZERO, true, hcol,
-                1.0, 1.0, UseItemState.NONE, false);
+                1.0, 1.0, UseItemState.NONE, false, 0.1, -1);
         TargetState target = hasTarget
                 ? new TargetState(x + 3, y, z, y + 1.62, Vec3d.ZERO, 0.0, 0.0, 0.0, 3.0, false)
                 : null;

@@ -51,9 +51,11 @@ public final class BoxerSettingsParser {
                 section.getConfigurationSection("items"), base.items(), warnings);
         BoxerSettings.Hunger hunger = parseHunger(
                 section.getConfigurationSection("hunger"), base.hunger(), warnings);
+        BoxerSettings.CritSpam critSpam = parseCritSpam(
+                section.getConfigurationSection("combat"), base.critSpam());
         return new BoxerSettings(ping, cps, jitter, aim, reach, tolerance,
                 wtap, movement, invincible, feedHunger,
-                invincibleMode, death, combat, selfHeal, items, hunger);
+                invincibleMode, death, combat, selfHeal, items, hunger, critSpam);
     }
 
     private static @NotNull BoxerSettings.InvincibleMode parseInvincibleMode(
@@ -170,7 +172,7 @@ public final class BoxerSettingsParser {
         int block = intIn(section, "block-slot", base.blockSlot(), 0, 8, warnings);
         boolean unbreakableKit = section.getBoolean("unbreakable-kit", base.unbreakableKit());
         boolean fillSplashPots = section.getBoolean("fill-splash-pots", base.fillSplashPots());
-        int splashPotCount = intIn(section, "splash-pot-count", base.splashPotCount(), 0, 9, warnings);
+        int splashPotCount = intIn(section, "splash-pot-count", base.splashPotCount(), 0, 36, warnings);
         return new BoxerSettings.Items(autoPickup, lockLoadout, weapon, rod, pot, food, block,
                 unbreakableKit, fillSplashPots, splashPotCount);
     }
@@ -184,6 +186,20 @@ public final class BoxerSettingsParser {
         boolean natural = section.getBoolean("natural", base.natural());
         int threshold = intIn(section, "eat-threshold", base.eatThreshold(), 0, 20, warnings);
         return new BoxerSettings.Hunger(natural, threshold);
+    }
+
+    /**
+     * The crit-spam toggle reads from the {@code combat} section
+     * ({@code combat.crit-spam}) — operators reach for it beside block-hit and
+     * s-tap — while living in its own sub-record so the {@code Combat} record's
+     * positional shape stays untouched (see {@link BoxerSettings.CritSpam}).
+     */
+    private static @NotNull BoxerSettings.CritSpam parseCritSpam(
+            @Nullable ConfigurationSection section, @NotNull BoxerSettings.CritSpam base) {
+        if (section == null) {
+            return base;
+        }
+        return new BoxerSettings.CritSpam(section.getBoolean("crit-spam", base.enabled()));
     }
 
     /**

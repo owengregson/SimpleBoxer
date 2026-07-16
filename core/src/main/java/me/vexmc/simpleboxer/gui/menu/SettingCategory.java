@@ -7,8 +7,10 @@ import org.jetbrains.annotations.NotNull;
  * The top-level grouping a {@link SettingDescriptor} belongs to — one tile on
  * the {@link SettingsHubMenu} and one paginated {@link CategoryMenu} behind it.
  * Categories exist only to organise the descriptor list into human-sized
- * screens; adding a knob to an existing category needs no change here, and a
- * brand-new category is a single enum constant.
+ * screens, cut along user intent ("make potion healing work" is one page, not
+ * two); adding a knob to an existing category needs no change here, and a
+ * brand-new category really is a single enum constant — the hub computes its
+ * tile slots from {@code values().length}.
  */
 enum SettingCategory {
 
@@ -16,15 +18,15 @@ enum SettingCategory {
     AIM("Aim & Clicking", Material.ENDER_EYE,
             "§7Ping, CPS, reach, aim cone & spring"),
     COMBAT("Combat", Material.IRON_SWORD,
-            "§7Block-hit, rod knockback, s-tap, misses"),
+            "§7Block-hit, rod, s-tap, misses, w-tap"),
     MOVEMENT("Movement", Material.LEATHER_BOOTS,
-            "§7How the boxer closes distance"),
+            "§7Closing style and strafe side-picking"),
+    POTIONS("Potions & Healing", Material.SPLASH_POTION,
+            "§7The self-heal band and the pot supply"),
     SURVIVAL("Survival", Material.TOTEM_OF_UNDYING,
-            "§7Invincibility, death, hunger, self-heal"),
+            "§7Invincibility, death and hunger"),
     ITEMS("Items", Material.CHEST,
-            "§7Auto-pickup, loadout lock, hotbar slots"),
-    WTAP("W-Tap", Material.FEATHER,
-            "§7Sprint-reset timing after a landed hit");
+            "§7Auto-pickup, loadout lock, hotbar layout");
 
     private final String title;
     private final Material icon;

@@ -46,7 +46,8 @@ class BoxerSettingsWriterTest {
                 new Movement(Movement.Style.STRAFE_WEAVE, 2.5, false), false, false,
                 BoxerSettings.InvincibleMode.ZERO_DAMAGE, BoxerSettings.Death.DEFAULT,
                 BoxerSettings.Combat.OFF, BoxerSettings.SelfHeal.OFF,
-                BoxerSettings.Items.DEFAULT, BoxerSettings.Hunger.DEFAULT);
+                BoxerSettings.Items.DEFAULT, BoxerSettings.Hunger.DEFAULT,
+                BoxerSettings.CritSpam.OFF);
         assertEquals(custom, roundTrip(custom));
     }
 
@@ -61,7 +62,8 @@ class BoxerSettingsWriterTest {
                         BoxerSettings.Combat.StrafePreset.JUKE, true, 0.07),
                 new BoxerSettings.SelfHeal(true, 7.0, 17.0, 4),
                 new BoxerSettings.Items(true, true, 1, 2, 3, 4, 5, true, true, 5),
-                new BoxerSettings.Hunger(true, 12));
+                new BoxerSettings.Hunger(true, 12),
+                BoxerSettings.CritSpam.ON);
         assertEquals(custom, roundTrip(custom));
     }
 
@@ -78,6 +80,16 @@ class BoxerSettingsWriterTest {
         assertTrue(unbreakable.items().unbreakableKit());
         assertEquals(unbreakable, roundTrip(unbreakable),
                 "an unbreakable-kit Items must survive write/parse unchanged");
+    }
+
+    @Test
+    void wholeInventorySplashPotCountRoundTrips() {
+        // The widened [0,36] ceiling: a maxed supply must survive write/parse —
+        // the parser and the record validation share the new bound.
+        BoxerSettings maxed = BoxerSettings.DEFAULTS.withItems(
+                new BoxerSettings.Items(false, false, 0, 1, 2, 3, 4, false, true, 36));
+        assertEquals(36, maxed.items().splashPotCount());
+        assertEquals(maxed, roundTrip(maxed), "a 36-pot supply survives write/parse");
     }
 
     @Test
@@ -123,5 +135,12 @@ class BoxerSettingsWriterTest {
                 BoxerSettingsWriter.styleName(Movement.Style.STRAFE_CIRCLE));
         assertEquals("rush", BoxerSettingsWriter.styleName(Movement.Style.RUSH));
         assertEquals("stand", BoxerSettingsWriter.styleName(Movement.Style.STAND));
+    }
+
+    @Test
+    void critSpamRoundTrips() {
+        BoxerSettings on = BoxerSettings.DEFAULTS.withCritSpam(BoxerSettings.CritSpam.ON);
+        assertTrue(on.critSpam().enabled());
+        assertEquals(on, roundTrip(on), "combat.crit-spam survives write/parse");
     }
 }

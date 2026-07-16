@@ -6,6 +6,7 @@ import me.vexmc.simpleboxer.common.physics.ClientPhysics;
 import me.vexmc.simpleboxer.common.physics.CollisionView;
 import me.vexmc.simpleboxer.common.physics.Vec3d;
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 
 /**
  * Pure geometry reasoning over the same {@link CollisionView} the integrator
@@ -132,13 +133,24 @@ public final class NavGeometry {
      */
     public static double groundHeight(@NotNull CollisionView world, double x, double z,
             double feetY) {
-        double half = ClientPhysics.PLAYER_WIDTH / 2.0;
+        return groundHeight(world, x, z, feetY, ClientPhysics.PLAYER_WIDTH / 2.0);
+    }
+
+    /**
+     * As {@link #groundHeight(CollisionView, double, double, double)} with an
+     * explicit footprint half-width: the full player footprint takes the max
+     * top the body would rest on, while a narrow probe (see
+     * {@link #stairwiseWalkable}) samples sub-cell structure — the individual
+     * lips of a stair block — that the footprint max hides.
+     */
+    public static double groundHeight(@NotNull CollisionView world, double x, double z,
+            double feetY, double half) {
         Box column = new Box(x - half, feetY - 4.0, z - half, x + half, feetY + MAX_JUMP_RISE, z + half);
         double best = Double.NaN;
         for (Box shape : world.collidingBoxes(column)) {
             if (shape.maxX() <= x - half || shape.minX() >= x + half
                     || shape.maxZ() <= z - half || shape.minZ() >= z + half) {
-                continue; // no horizontal overlap with the standing footprint
+                continue; // no horizontal overlap with the probe footprint
             }
             double top = shape.maxY();
             if (top <= feetY + MAX_JUMP_RISE + 1.0E-6
@@ -147,5 +159,168 @@ public final class NavGeometry {
             }
         }
         return best;
+    }
+
+    /** Probe half-width for sub-cell stair sampling — narrow enough to isolate one lip. */
+    private static final double STAIR_PROBE_HALF = 0.05;
+    /** Ground-sample stations across a cell along the travel direction (cell fractions). */
+    private static final double[] STAIR_SAMPLES = {0.15, 0.35, 0.55, 0.75, 0.95};
+
+    /**
+     * True when cell {@code (cellX, cellZ)}, entered along the cardinal
+     * {@code (dx, dz)} from a floor at {@code fromFloor}, is climbed by
+     * successive vanilla auto-steps rather than a jump: sampling the ground at
+     * five stations across the cell along the travel line, every station must
+     * have ground and no station may RISE more than {@code STEP_HEIGHT} above
+     * the previous one, ending within a step of {@code targetFloor} (the
+     * cell's standing surface). A real stair block — a 0.5 bottom lip plus a
+     * 1.0 back half — passes as two 0.5 sub-steps; a sheer 1.0 face fails on
+     * its first station. Player-identity safe: this only refines the brain's
+     * model of what the vanilla auto-step already climbs.
+     */
+    public static boolean stairwiseWalkable(@NotNull CollisionView world, int cellX, int cellZ,
+            int dx, int dz, double fromFloor, double targetFloor) {
+        double cx = cellX + 0.5;
+        double cz = cellZ + 0.5;
+        double prev = fromFloor;
+        for (double t : STAIR_SAMPLES) {
+            double top = groundHeight(world, cx + dx * (t - 0.5), cz + dz * (t - 0.5),
+                    prev, STAIR_PROBE_HALF);
+            if (Double.isNaN(top) || top - prev > ClientPhysics.STEP_HEIGHT + 1.0E-6) {
+                return false;
+            }
+            prev = top;
+        }
+        return Math.abs(targetFloor - prev) <= ClientPhysics.STEP_HEIGHT + 1.0E-6;
+    }
+
+    /** Coarse march spacing for {@link #stepFaceAhead} (catches ≥ 0.2-deep shapes). */
+    private static final double FACE_MARCH = 0.2;
+    /** Bisection refinements after the march: tolerance FACE_MARCH / 2⁸ ≈ 0.00078 blocks. */
+    private static final int FACE_BISECT_STEPS = 8;
+
+    /**
+     * A face the moving box will contact within {@code maxAhead} blocks of
+     * travel along {@code dir}: {@code distance} is the largest verified CLEAR
+     * shift (an under-estimate of true contact by at most the bisection
+     * tolerance) and {@code rise} the exact lift the tallest contacting shape
+     * demands ({@code shape.maxY − feetY} — no probe-granularity rounding, so
+     * a 1.0 step reads exactly 1.0).
+     */
+    public record StepFace(double distance, double rise) {}
+
+    /**
+     * March-then-bisect the box along {@code dir} for the first contact, or
+     * {@code null} when the way is clear through {@code maxAhead}. Replaces
+     * the fixed-distance point probe as ProactiveJump's face finder: the jump
+     * needs the CONTACT DISTANCE (for the time-to-contact window), not just
+     * "something within 0.75".
+     */
+    public static @Nullable StepFace stepFaceAhead(@NotNull CollisionView world, @NotNull Box box,
+            @NotNull Vec3d dir, double maxAhead) {
+        Vec3d flat = dir.horizontalNormalized();
+        if (flat.lengthSqr() < 1.0E-8) {
+            return null;
+        }
+        double clear = 0.0;
+        double contact = Double.NaN;
+        for (double s = FACE_MARCH; s <= maxAhead + 1.0E-9; s += FACE_MARCH) {
+            if (collides(world, box.offset(flat.x() * s, 0.0, flat.z() * s))) {
+                contact = s;
+                break;
+            }
+            clear = s;
+        }
+        if (Double.isNaN(contact)) {
+            return null;
+        }
+        for (int i = 0; i < FACE_BISECT_STEPS; i++) {
+            double mid = (clear + contact) / 2.0;
+            if (collides(world, box.offset(flat.x() * mid, 0.0, flat.z() * mid))) {
+                contact = mid;
+            } else {
+                clear = mid;
+            }
+        }
+        Box contactBox = box.offset(flat.x() * contact, 0.0, flat.z() * contact);
+        double rise = 0.0;
+        for (Box shape : world.collidingBoxes(contactBox)) {
+            if (shape.intersects(contactBox)) {
+                rise = Math.max(rise, shape.maxY() - box.minY());
+            }
+        }
+        return new StepFace(clear, rise);
+    }
+
+    /**
+     * True when a mover at {@code refFloor} could brush PAST cell
+     * {@code (cellX, cellZ)} at roughly the same level: readable, ground
+     * within an auto-step of {@code refFloor}, and the standing box fits. The
+     * clearance model counts everything else — walls, risers, drops, void,
+     * missing headroom, unreadable cells — as an obstruction to keep a berth
+     * from. Unreadable-first ordering is the Folia contract: no geometry read
+     * ever happens on a cell {@code isReadable} refuses.
+     */
+    public static boolean standableLevel(@NotNull CollisionView world, int cellX, int cellZ,
+            double refFloor) {
+        int refY = (int) Math.floor(refFloor);
+        for (int y = refY - 5; y <= refY + 2; y++) {
+            if (!world.isReadable(cellX, y, cellZ)) {
+                return false;
+            }
+        }
+        double ground = groundHeight(world, cellX + 0.5, cellZ + 0.5, refFloor);
+        if (Double.isNaN(ground) || Math.abs(ground - refFloor) > ClientPhysics.STEP_HEIGHT + 1.0E-6) {
+            return false;
+        }
+        return !collides(world, playerBox(cellX + 0.5, ground, cellZ + 0.5));
+    }
+
+    /**
+     * The soft-clearance fraction for standing in cell {@code (cellX, cellZ)}:
+     * 0.6 when an obstruction sits in the adjacent ring (Chebyshev 1), 0.2
+     * when the nearest is at ring 2, 0.0 when both rings are clear — the
+     * {@code (R − d)/R} shape with R = 2.5 cells. Callers scale by their own
+     * cost unit and MUST memoize per search (up to 24 ground probes per cell).
+     */
+    public static double clearanceFraction(@NotNull CollisionView world, int cellX, int cellZ,
+            double refFloor) {
+        for (int ring = 1; ring <= 2; ring++) {
+            for (int dx = -ring; dx <= ring; dx++) {
+                for (int dz = -ring; dz <= ring; dz++) {
+                    if (Math.max(Math.abs(dx), Math.abs(dz)) != ring) {
+                        continue;
+                    }
+                    if (!standableLevel(world, cellX + dx, cellZ + dz, refFloor)) {
+                        return ring == 1 ? 0.6 : 0.2;
+                    }
+                }
+            }
+        }
+        return 0.0;
+    }
+
+    /**
+     * Upper bound of the ceiling probe. The open-air jump apex is +1.2523 blocks
+     * (0.42 impulse under 0.98 drag / 0.08 gravity — the motion pins), so a roof
+     * at or beyond 1.3 of headroom can never clip the arc and reads as OPEN.
+     */
+    public static final double CEILING_PROBE_MAX = 1.3;
+
+    /**
+     * The headroom above the standing box: the largest probed upward shift (in
+     * {@code PROBE} = 0.1 steps, up to {@link #CEILING_PROBE_MAX}) the box can
+     * make without colliding — the column-above-the-head twin of {@link #riseAhead}'s
+     * lifted probe. {@code 0.0} means a roof sits within the first probe step;
+     * {@link Double#POSITIVE_INFINITY} means nothing overhead can clip a jump.
+     * Quantized to the probe grid: callers gate on bands, not exact block math.
+     */
+    public static double ceilingGap(@NotNull CollisionView world, @NotNull Box box) {
+        for (double dy = PROBE; dy <= CEILING_PROBE_MAX + 1.0E-6; dy += PROBE) {
+            if (collides(world, box.offset(0.0, dy, 0.0))) {
+                return dy - PROBE;
+            }
+        }
+        return Double.POSITIVE_INFINITY;
     }
 }

@@ -67,21 +67,6 @@ public final class Icon {
         return icon;
     }
 
-    /** A copy of an existing stack, editable through this builder. */
-    public static @NotNull Icon copyOf(@NotNull ItemStack existing) {
-        Icon icon = new Icon(existing.getType(), existing.getAmount());
-        ItemMeta existingMeta = existing.getItemMeta();
-        if (existingMeta != null && icon.meta != null) {
-            if (existingMeta.hasDisplayName()) {
-                icon.meta.setDisplayName(existingMeta.getDisplayName());
-            }
-            if (existingMeta.hasLore()) {
-                icon.meta.setLore(existingMeta.getLore());
-            }
-        }
-        return icon;
-    }
-
     public @NotNull Icon name(@NotNull String displayName) {
         if (meta != null) {
             meta.setDisplayName(displayName);
@@ -194,14 +179,5 @@ public final class Icon {
     /** A blank-named filler pane — the menu border and dead space. */
     public static @NotNull ItemStack filler(@NotNull Material pane) {
         return of(pane).name(" ").build();
-    }
-
-    /** Whether the running server even has this material (cross-version guard). */
-    public static boolean materialExists(@NotNull String name) {
-        try {
-            return Material.getMaterial(name) != null;
-        } catch (Throwable unsupported) {
-            return false;
-        }
     }
 }

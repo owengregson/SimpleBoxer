@@ -45,7 +45,7 @@ class ClickControllerTest {
 
     private static SelfState selfAtOrigin() {
         return new SelfState(0.0, 64.0, 0.0, Vec3d.ZERO,
-                true, false, 1.0, 1.0, UseItemState.NONE, false);
+                true, false, 1.0, 1.0, UseItemState.NONE, false, 0.1, -1);
     }
 
     private static TargetState targetAt(double x, double y, double z, Vec3d vel) {
@@ -160,5 +160,97 @@ class ClickControllerTest {
 
         assertEquals(1, out.size(), "a forced miss still swings the arm");
         assertInstanceOf(ActionIntent.Swing.class, out.get(0));
+    }
+
+    /* ---- Crit-spam window gating -------------------------------------- */
+
+    private static SelfState airborneSelf(double vy) {
+        return new SelfState(0.0, 64.0, 0.0, new Vec3d(0.0, vy, 0.0),
+                false, false, 1.0, 1.0, UseItemState.NONE, false, 0.1, -1);
+    }
+
+    private static Perception critPerception(SelfState self, int pingMs, long serverTick) {
+        return new Perception(self, targetAt(0.0, 64.0, 2.0, Vec3d.ZERO), TerrainView.OPEN,
+                InventoryView.EMPTY, new CombatState(1.0, false, serverTick, 0), pingMs);
+    }
+
+    /** A memory with the crit-spam module stamped active for {@code serverTick}. */
+    private static BrainMemory critActive(long serverTick) {
+        BrainMemory mem = mem();
+        mem.ints(CritSpam.MEM_ID, CritSpam.SCRATCH_SIZE)[CritSpam.SLOT_ACTIVE_STAMP] =
+                (int) serverTick + 1;
+        return mem;
+    }
+
+    @Test
+    void critSpamActive_risingClickWithholdsTheAttackButStillSwings() {
+        // Rising at +0.3332 (the first post-launch tick): not crit-eligible, so
+        // the otherwise-valid attack is withheld -- the metronome still swings,
+        // the effective CPS is untouched.
+        Perception p = critPerception(airborneSelf(0.3332), 0, 42L);
+        List<ActionIntent> out = new ArrayList<>();
+
+        controller.consider(p, 0.0f, 3.0, 30.0, false, 0.0, primedClock(), FIRE_AT,
+                critActive(42L), out);
+
+        assertEquals(1, out.size(), "the click is not dropped, only the attack");
+        assertInstanceOf(ActionIntent.Swing.class, out.get(0));
+    }
+
+    @Test
+    void critSpamActive_descendingClickAttacks() {
+        // Descending at -0.0784 (the first post-bonk tick): airborne + falling
+        // is the fallDistance>0 crit window -- the attack goes through.
+        Perception p = critPerception(airborneSelf(-0.0784), 0, 42L);
+        List<ActionIntent> out = new ArrayList<>();
+
+        controller.consider(p, 0.0f, 3.0, 30.0, false, 0.0, primedClock(), FIRE_AT,
+                critActive(42L), out);
+
+        assertEquals(2, out.size());
+        assertInstanceOf(ActionIntent.Attack.class, out.get(0), "descending click attacks");
+        assertInstanceOf(ActionIntent.Swing.class, out.get(1));
+    }
+
+    @Test
+    void critSpamActive_groundedClickWithholdsTheAttack() {
+        Perception p = critPerception(selfAtOrigin(), 0, 42L);
+        List<ActionIntent> out = new ArrayList<>();
+
+        controller.consider(p, 0.0f, 3.0, 30.0, false, 0.0, primedClock(), FIRE_AT,
+                critActive(42L), out);
+
+        assertEquals(1, out.size(), "grounded ticks cannot crit -- swing only");
+        assertInstanceOf(ActionIntent.Swing.class, out.get(0));
+    }
+
+    @Test
+    void critSpamStaleStamp_doesNotGate() {
+        // Stamped for tick 41 but clicking on tick 42: the module did not run
+        // this brain tick, so the gate must not leak across ticks.
+        Perception p = critPerception(airborneSelf(0.3332), 0, 42L);
+        List<ActionIntent> out = new ArrayList<>();
+
+        controller.consider(p, 0.0f, 3.0, 30.0, false, 0.0, primedClock(), FIRE_AT,
+                critActive(41L), out);
+
+        assertEquals(2, out.size(), "no fresh stamp -> vanilla click behavior");
+        assertInstanceOf(ActionIntent.Attack.class, out.get(0));
+    }
+
+    @Test
+    void critSpamActive_pingExtrapolatesOwnPhaseToArrival() {
+        // Rising +0.05 NOW, but with 100ms ping the press lands (100/2)/50 = 1
+        // tick later, by which time vy ~ 0.05 - 0.08x1 = -0.03: descending at
+        // arrival, so the attack fires -- the same ping/2 lead the target
+        // position already gets in the reach test.
+        Perception p = critPerception(airborneSelf(0.05), 100, 42L);
+        List<ActionIntent> out = new ArrayList<>();
+
+        controller.consider(p, 0.0f, 3.0, 30.0, false, 0.0, primedClock(), FIRE_AT,
+                critActive(42L), out);
+
+        assertEquals(2, out.size());
+        assertInstanceOf(ActionIntent.Attack.class, out.get(0));
     }
 }

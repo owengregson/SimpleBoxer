@@ -26,6 +26,13 @@ final class BoxerMenu extends Menu {
         this.boxer = boxer;
     }
 
+    // The panel shows live state — status, target, kit count — so re-render
+    // once a second while open rather than only on interaction.
+    @Override
+    protected int refreshEveryTicks() {
+        return 20;
+    }
+
     @Override
     protected void build() {
         if (boxer.player() == null || gui().manager().byUuid(boxer.uuid()).isEmpty()) {
@@ -99,25 +106,7 @@ final class BoxerMenu extends Menu {
                     click.refresh();
                 }));
 
-        set(14, Button.of(Icon.of(Material.ENCHANTED_BOOK).glow()
-                        .name("§b§lApply Preset")
-                        .lore("§7Overwrite this boxer's behaviour with",
-                                "§7a whole preset (the kit is untouched).",
-                                "",
-                                "§eClick to choose").build(),
-                click -> new PresetPickerMenu(gui(), this, "Apply to " + boxer.name(), true,
-                        chosen -> {
-                            BoxerSettings applied = chosen == null
-                                    ? gui().config().snapshot().defaults()
-                                    : preset(chosen);
-                            boxer.retune(applied);
-                            click.player().sendMessage("§aApplied §f"
-                                    + (chosen == null ? "defaults" : chosen)
-                                    + "§a to " + boxer.name() + ".");
-                            open(click.player());
-                        }).open(click.player())));
-
-        set(15, Button.of(Icon.of(Material.ENDER_PEARL)
+        set(14, Button.of(Icon.of(Material.ENDER_PEARL)
                         .name("§b§lTeleport to")
                         .lore("§7Warp yourself to this boxer.",
                                 "",
@@ -135,7 +124,7 @@ final class BoxerMenu extends Menu {
                     }, () -> {});
                 }));
 
-        set(16, Button.of(Icon.of(Material.LEAD)
+        set(15, Button.of(Icon.of(Material.LEAD)
                         .name("§b§lBring here")
                         .lore("§7Warp this boxer to you.",
                                 "",
@@ -188,11 +177,6 @@ final class BoxerMenu extends Menu {
         set(44, Button.of(MenuParts.close(), click -> click.player().closeInventory()));
 
         fillEmpty(MenuParts.BACKGROUND);
-    }
-
-    private @NotNull BoxerSettings preset(@NotNull String name) {
-        BoxerSettings preset = gui().config().snapshot().preset(name);
-        return preset != null ? preset : gui().config().snapshot().defaults();
     }
 
     /** Synchronous teleport, falling back to the async form a Folia region demands. */

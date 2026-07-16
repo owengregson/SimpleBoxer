@@ -70,6 +70,14 @@ public final class PacketIO {
     private @Nullable Object releaseUseItemAction;
     private @Nullable Object blockPosOrigin;
     private @Nullable Object directionDown;
+    // Spigot's anti-spam wall-clock field on the use-item / player-action
+    // packets ("timestamp", a patch-added public long — never remapped). The
+    // network decode constructor stamps it for every real client packet; the
+    // direct constructors leave it 0, which PlayerConnection.checkLimit reads
+    // as a flood and silently drops after its 9-packet lifetime grace. Null
+    // where a build does not carry the patch (the stamp is then skipped).
+    private @Nullable Field useItemTimestamp;
+    private @Nullable Field playerActionTimestamp;
 
     private @Nullable Constructor<?> inputRecordConstructor;
     private @Nullable Constructor<?> inputPacketConstructor;
@@ -314,8 +322,10 @@ public final class PacketIO {
                     preferUseItem(constructor, true, true);
                 }
             }
+            useItemTimestamp = spigotTimestampField(useItem);
         } catch (ReflectiveOperationException noUseItem) {
             useItemConstructor = null;
+            useItemTimestamp = null;
         }
 
         try {
@@ -344,8 +354,10 @@ public final class PacketIO {
                     playerActionHasSequence = true;
                 }
             }
+            playerActionTimestamp = spigotTimestampField(action);
         } catch (ReflectiveOperationException noPlayerAction) {
             playerActionConstructor = null;
+            playerActionTimestamp = null;
         }
     }
 
@@ -369,6 +381,39 @@ public final class PacketIO {
         }
     }
 
+    /**
+     * The Spigot-patch {@code public long timestamp} anti-spam field on a
+     * serverbound packet, made settable — or {@code null} where this build does
+     * not carry the patch. A CraftBukkit patch addition, so the name is literal
+     * on spigot- and mojang-mapped servers alike (added after remapping).
+     */
+    private static @Nullable Field spigotTimestampField(@NotNull Class<?> packetClass) {
+        try {
+            Field field = packetClass.getDeclaredField("timestamp");
+            if (field.getType() != long.class || Modifier.isStatic(field.getModifiers())) {
+                return null;
+            }
+            field.setAccessible(true);
+            return field;
+        } catch (NoSuchFieldException | RuntimeException absent) {
+            return null;
+        }
+    }
+
+    /**
+     * Stamps the wall clock into the packet's Spigot anti-spam field — exactly
+     * what the network decode constructor does to every real client's packet.
+     * Without it, PlayerConnection.checkLimit sees a never-advancing timestamp,
+     * its 300ms reset branch never fires, and after a 9-packet lifetime grace
+     * every use-item is silently dropped before the handler runs.
+     */
+    private static void stampTimestamp(@Nullable Field timestamp, @NotNull Object packet)
+            throws ReflectiveOperationException {
+        if (timestamp != null) {
+            timestamp.setLong(packet, System.currentTimeMillis());
+        }
+    }
+
     /** Whether this server exposes the held-slot + use-item + release packets. */
     public boolean itemInteractionsAvailable() {
         return setCarriedItemConstructor != null && useItemConstructor != null
@@ -384,7 +429,9 @@ public final class PacketIO {
      * {@code ServerboundUseItemPacket} — right-click with the held item (rod cast,
      * block raise, potion throw, eat start). {@code sequence} is the per-boxer
      * block-change counter (ignored pre-1.19); {@code yaw}/{@code pitch} are the
-     * current crosshair (ignored pre-1.21.3).
+     * current crosshair (ignored pre-1.21.3). Stamped with the same wall clock
+     * the decode constructor gives every real client's packet, so Spigot's spam
+     * limiter rates the boxer like a socket client instead of a flood.
      */
     public @Nullable Object useItem(boolean mainHand, int sequence, float yaw, float pitch)
             throws ReflectiveOperationException {
@@ -392,30 +439,36 @@ public final class PacketIO {
             return null;
         }
         Object hand = mainHand ? this.mainHand : offHand;
+        Object packet;
         if (useItemHasRotation) {
-            return useItemConstructor.newInstance(hand, sequence, yaw, pitch);
+            packet = useItemConstructor.newInstance(hand, sequence, yaw, pitch);
+        } else if (useItemHasSequence) {
+            packet = useItemConstructor.newInstance(hand, sequence);
+        } else {
+            packet = useItemConstructor.newInstance(hand);
         }
-        if (useItemHasSequence) {
-            return useItemConstructor.newInstance(hand, sequence);
-        }
-        return useItemConstructor.newInstance(hand);
+        stampTimestamp(useItemTimestamp, packet);
+        return packet;
     }
 
     /**
      * {@code ServerboundPlayerActionPacket(RELEASE_USE_ITEM, …)} — stop using the
      * held item (finish/abort a block or eat). Position and direction are ignored
-     * by the handler for this action; origin + DOWN satisfy the constructor.
+     * by the handler for this action; origin + DOWN satisfy the constructor. The
+     * Spigot timestamp is stamped where the build carries it, matching decode.
      */
     public @Nullable Object releaseUseItem(int sequence) throws ReflectiveOperationException {
         if (playerActionConstructor == null || releaseUseItemAction == null
                 || blockPosOrigin == null || directionDown == null) {
             return null;
         }
-        return playerActionHasSequence
+        Object packet = playerActionHasSequence
                 ? playerActionConstructor.newInstance(
                         releaseUseItemAction, blockPosOrigin, directionDown, sequence)
                 : playerActionConstructor.newInstance(
                         releaseUseItemAction, blockPosOrigin, directionDown);
+        stampTimestamp(playerActionTimestamp, packet);
+        return packet;
     }
 
     /**

@@ -7,7 +7,7 @@ package me.vexmc.simpleboxer.common.physics;
  */
 public record Box(double minX, double minY, double minZ, double maxX, double maxY, double maxZ) {
 
-    /** The standing player box: 0.6 wide, {@code height} tall, feet at (x,y,z). */
+    /** The standing player box: {@code width} wide, {@code height} tall, feet at (x,y,z). */
     public static Box player(double x, double y, double z, double width, double height) {
         double half = width / 2.0;
         return new Box(x - half, y, z - half, x + half, y + height, z + half);

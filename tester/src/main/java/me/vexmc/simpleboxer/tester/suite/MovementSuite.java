@@ -1,6 +1,10 @@
 package me.vexmc.simpleboxer.tester.suite;
 
+import java.lang.reflect.Method;
 import java.util.List;
+import java.util.Queue;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.atomic.AtomicInteger;
 import me.vexmc.simpleboxer.api.Boxer;
 import me.vexmc.simpleboxer.common.settings.BoxerSettings;
 import me.vexmc.simpleboxer.common.settings.DifficultyPresets;
@@ -9,6 +13,12 @@ import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.World;
+import org.bukkit.entity.Player;
+import org.bukkit.event.Event;
+import org.bukkit.event.EventPriority;
+import org.bukkit.event.HandlerList;
+import org.bukkit.event.Listener;
+import org.bukkit.plugin.EventExecutor;
 import org.bukkit.potion.PotionEffect;
 import org.bukkit.potion.PotionEffectType;
 import org.bukkit.util.Vector;
@@ -192,6 +202,7 @@ public final class MovementSuite {
                             center.clone().add(0, 0, 12), DifficultyPresets.DUMMY);
                     Boxer runner = Arenas.spawn("WallRunner", center,
                             BoxerSettings.DEFAULTS.withCps(0.0));
+                    FailMoveProbe probe = context.sync(() -> FailMoveProbe.watch("WallRunner"));
                     try {
                         context.awaitTicks(5);
                         context.syncRun(() -> runner.setTarget(post.player()));
@@ -207,6 +218,7 @@ public final class MovementSuite {
                         int stillAirborne = 0;
                         int worstStuck = 0;
                         double stuckY = 0.0;
+                        boolean settledAfterJumps = false;
                         for (int tick = 0; tick < 80; tick++) {
                             context.awaitTicks(1);
                             double[] yg = context.sync(() -> new double[] {
@@ -224,6 +236,9 @@ public final class MovementSuite {
                             } else {
                                 stillAirborne = 0;
                             }
+                            if (tick >= 40 && onGround) {
+                                settledAfterJumps = true;
+                            }
                             prevY = y;
                         }
                         // A glued boxer hovers airborne (no support) for many ticks; a
@@ -231,7 +246,23 @@ public final class MovementSuite {
                         context.expect(worstStuck < 8,
                                 "boxer did not glue AIRBORNE to the wall (worst floating run "
                                         + worstStuck + " ticks at y=" + stuckY + ")");
+                        // Descent must actually complete: after the early jump cycles the
+                        // boxer must touch a supported surface again (the floor or the
+                        // step) — a glued body hangs airborne and never re-grounds.
+                        context.expect(settledAfterJumps,
+                                "boxer re-grounded after jumping at the wall");
+                        // Ground truth where Paper exposes it: a vanilla-identical client
+                        // pressed into a wall is NEVER rejected. Zero fail-moves — not
+                        // "recovers eventually" — is the bar (the 0.6.x recovery hid ~20
+                        // silent CLIPPED_INTO_BLOCK rejections per second behind a
+                        // passing hover check).
+                        if (probe.available()) {
+                            context.expect(probe.failures() == 0,
+                                    "server accepted every wall-pressed move (got "
+                                            + probe.failures() + ": " + probe.describe() + ")");
+                        }
                     } finally {
+                        context.syncRun(probe::close);
                         context.syncRun(runner::remove);
                         context.syncRun(post::remove);
                     }
@@ -260,6 +291,7 @@ public final class MovementSuite {
                     // An idle dummy standing one block in front of the wall.
                     Boxer victim = Arenas.spawn("WallSlider",
                             center.clone().add(0, 0, 1), DifficultyPresets.DUMMY);
+                    FailMoveProbe probe = context.sync(() -> FailMoveProbe.watch("WallSlider"));
                     try {
                         context.awaitTicks(10); // settle on the ground
                         double feetGround = groundY + 1.0; // 81.0
@@ -310,7 +342,13 @@ public final class MovementSuite {
                         context.expect(worstStuck < 8,
                                 "boxer slid DOWN the wall, not glued (worst glued run " + worstStuck
                                         + " ticks at y=" + stuckY + ")");
+                        if (probe.available()) {
+                            context.expect(probe.failures() == 0,
+                                    "server accepted every wall-slide move (got "
+                                            + probe.failures() + ": " + probe.describe() + ")");
+                        }
                     } finally {
+                        context.syncRun(probe::close);
                         context.syncRun(victim::remove);
                     }
                 }),
@@ -343,6 +381,7 @@ public final class MovementSuite {
                             center.clone().add(0, 0, 8), DifficultyPresets.DUMMY);
                     Boxer victim = Arenas.spawn("Cornered", center,
                             BoxerSettings.DEFAULTS.withCps(0.0));
+                    FailMoveProbe probe = context.sync(() -> FailMoveProbe.watch("Cornered"));
                     try {
                         context.awaitTicks(5);
                         context.syncRun(() -> victim.setTarget(post.player())); // presses into the back wall
@@ -381,10 +420,93 @@ public final class MovementSuite {
                         context.expect(worstStuck < 10,
                                 "cornered+lofted boxer slid down between lofts, not glued (worst "
                                         + worstStuck + " ticks at y=" + stuckY + ")");
+                        if (probe.available()) {
+                            context.expect(probe.failures() == 0,
+                                    "server accepted every cornered wall-press move (got "
+                                            + probe.failures() + ": " + probe.describe() + ")");
+                        }
                     } finally {
+                        context.syncRun(probe::close);
                         context.syncRun(victim::remove);
                         context.syncRun(post::remove);
                     }
                 }));
+    }
+
+    /**
+     * Counts the server's movement rejections ({@code PlayerFailMoveEvent},
+     * modern Paper) for one named player while a wall case runs. Rejections —
+     * not positions — are the ground truth for sim<->server divergence: a
+     * vanilla-identical client pressed into a wall is never corrected, so the
+     * wall cases assert an exact zero. Reflective because the event postdates
+     * the floor API this plugin compiles against; where the class is absent
+     * ({@link #available()} false) the zero-rejections assertion is skipped —
+     * those versions collect collisions tolerantly and never showed the glue.
+     * Register ({@link #watch}) and {@link #close} inside {@code context.sync}
+     * hops so handler-list writes stay on the server thread.
+     */
+    private static final class FailMoveProbe implements AutoCloseable {
+
+        private static final String EVENT_CLASS =
+                "io.papermc.paper.event.player.PlayerFailMoveEvent";
+
+        private final String playerName;
+        private final AtomicInteger failures = new AtomicInteger();
+        private final Queue<String> reasons = new ConcurrentLinkedQueue<>();
+        private final Listener listener = new Listener() {};
+        private boolean registered;
+
+        private FailMoveProbe(String playerName) {
+            this.playerName = playerName;
+        }
+
+        /** Registers the reflective handler; inert where the event class is absent. */
+        static FailMoveProbe watch(String playerName) {
+            FailMoveProbe probe = new FailMoveProbe(playerName);
+            try {
+                Class<?> eventClass = Class.forName(EVENT_CLASS);
+                Method getPlayer = eventClass.getMethod("getPlayer");
+                Method getFailReason = eventClass.getMethod("getFailReason");
+                EventExecutor executor = (listener, event) -> {
+                    try {
+                        Player who = (Player) getPlayer.invoke(event);
+                        if (who.getName().equals(probe.playerName)) {
+                            probe.failures.incrementAndGet();
+                            probe.reasons.add(String.valueOf(getFailReason.invoke(event)));
+                        }
+                    } catch (Throwable ignored) {
+                        // the probe must never break the move pipeline
+                    }
+                };
+                @SuppressWarnings("unchecked")
+                Class<? extends Event> typed = (Class<? extends Event>) eventClass;
+                Bukkit.getPluginManager().registerEvent(typed, probe.listener,
+                        EventPriority.MONITOR, executor,
+                        Bukkit.getPluginManager().getPlugin("SimpleBoxerTester"), false);
+                probe.registered = true;
+            } catch (Throwable preFailMoveApi) {
+                // pre-PlayerFailMoveEvent Paper — the probe stays inert
+            }
+            return probe;
+        }
+
+        boolean available() {
+            return registered;
+        }
+
+        int failures() {
+            return failures.get();
+        }
+
+        String describe() {
+            return String.join(",", reasons);
+        }
+
+        @Override
+        public void close() {
+            if (registered) {
+                HandlerList.unregisterAll(listener);
+            }
+        }
     }
 }

@@ -38,8 +38,21 @@ public final class ClientPhysics {
     public static final double SPRINT_JUMP_PUSH = 0.2;
     /** Entity.push's 0.05F shove, double-promoted exactly as vanilla does. */
     public static final double PUSH_STRENGTH = 0.05000000074505806;
-    public static final double PLAYER_WIDTH = 0.6;
-    public static final double PLAYER_HEIGHT = 1.8;
+    /**
+     * The standing player dimensions, float-promoted EXACTLY as the server
+     * promotes them: {@code (double) 0.6f} and {@code (double) 1.8f}. The server
+     * rebuilds the AABB from every claimed position via
+     * {@code EntityDimensions.makeBoundingBox} — half-width
+     * {@code (double) (0.6f / 2.0f)} = 0.30000001192092896, height
+     * 1.7999999523162842 — and halving the promoted width in doubles is exact,
+     * so the sim's box is bit-identical to that rebuild. With the plain 0.6/1.8
+     * literals the sim box was 1.19e-8 narrower per side: every flush wall rest
+     * rebuilt server-side into a (0, 1e-7] penetration, which the strict
+     * full-cube collision collect on Paper 1.21.11+/26.x classifies as a new
+     * collision and silently rejects (CLIPPED_INTO_BLOCK) — the 0.6.x wall glue.
+     */
+    public static final double PLAYER_WIDTH = 0.6000000238418579;
+    public static final double PLAYER_HEIGHT = 1.7999999523162842;
     public static final double STEP_HEIGHT = 0.6;
     /** Vanilla collision epsilon ({@code CollisionUtil.COLLISION_EPSILON}). */
     static final double EPSILON = 1.0E-7;
@@ -350,7 +363,14 @@ public final class ClientPhysics {
         return new Vec3d(rx, ry, rz);
     }
 
-    /** Shapes.collide for one axis: clamp {@code d} against every shape. */
+    /**
+     * Paper's {@code CollisionUtil.collideX/Y/Z} for one axis: clamp {@code d}
+     * against every shape, keeping the raw gap — which may be NEGATIVE down to
+     * the 1e-7 epsilon, backing a sub-epsilon-overlapping box OUT to flush in
+     * one sweep exactly as the server resolves a 1-ulp landing. (Vanilla quirk
+     * kept: the per-shape |d| head check zeroes a residual back-out when
+     * another shape follows it in the list.)
+     */
     private static double sweep(int axis, Box box, List<Box> shapes, double d) {
         if (d == 0.0) {
             return 0.0;
@@ -365,12 +385,12 @@ public final class ClientPhysics {
             if (d > 0.0) {
                 double gap = shape.min(axis) - box.max(axis);
                 if (gap >= -EPSILON && gap < d) {
-                    d = Math.max(gap, 0.0);
+                    d = gap;
                 }
             } else {
                 double gap = shape.max(axis) - box.min(axis);
                 if (gap <= EPSILON && gap > d) {
-                    d = Math.min(gap, 0.0);
+                    d = gap;
                 }
             }
         }

@@ -30,7 +30,7 @@ class EngageGoalTest {
     private static Perception at(double distance) {
         Perception.SelfState self = new Perception.SelfState(
                 0, 64, 0, Vec3d.ZERO, true, false,
-                1.0, 1.0, Perception.UseItemState.NONE, false);
+                1.0, 1.0, Perception.UseItemState.NONE, false, 0.1, -1);
         Perception.TargetState target = new Perception.TargetState(
                 distance, 64, 0, 65.62, Vec3d.ZERO,
                 90.0, 0.0, 0.0, distance, false);

@@ -2,6 +2,7 @@ package me.vexmc.simpleboxer.gui;
 
 import java.util.HashMap;
 import java.util.Map;
+import me.vexmc.simpleboxer.common.scheduling.TaskHandle;
 import org.bukkit.Bukkit;
 import org.bukkit.Material;
 import org.bukkit.entity.Player;
@@ -27,6 +28,12 @@ import org.jetbrains.annotations.Nullable;
  * hook a subclass overrides. The loadout editor is the one menu that does more
  * than route buttons, and it still never lets Bukkit move a real item — it
  * mutates a model and re-renders.</p>
+ *
+ * <p>A screen that displays live state can opt into a timed re-render via
+ * {@link #refreshEveryTicks()}: {@link #open} then starts a repeating task on
+ * the viewer's owning thread (the same thread click handlers already mutate
+ * this inventory from) and closing the screen cancels it, so lore can't go
+ * stale while a menu just sits open.</p>
  */
 @SuppressWarnings("deprecation") // §-string createInventory title: the cross-version overload
 public abstract class Menu implements InventoryHolder {
@@ -37,6 +44,7 @@ public abstract class Menu implements InventoryHolder {
     private final Inventory inventory;
     private final Map<Integer, Button> buttons = new HashMap<>();
     private @Nullable Player viewer;
+    private @Nullable TaskHandle refreshTask;
 
     protected Menu(@NotNull Gui gui, @Nullable Menu parent, int rows, @NotNull String title) {
         this.gui = gui;
@@ -75,6 +83,17 @@ public abstract class Menu implements InventoryHolder {
     /** Populate the inventory. Called on open and on every {@link #refresh()}. */
     protected abstract void build();
 
+    /**
+     * Re-render period in ticks while this menu is open, or 0 for no timed
+     * refresh (the default). Screens that show live state (the roster, a
+     * boxer's panel) override this; edit screens stay at 0 — their state only
+     * changes through their own clicks, and a timed re-render there would
+     * only churn under the operator mid-interaction.
+     */
+    protected int refreshEveryTicks() {
+        return 0;
+    }
+
     /* ------------------------------------------------------------------ */
     /*  Rendering helpers                                                  */
     /* ------------------------------------------------------------------ */
@@ -101,19 +120,6 @@ public abstract class Menu implements InventoryHolder {
         inventory.clear();
     }
 
-    /** A one-pane frame around the edges of the menu. */
-    protected final void border(@NotNull Material pane) {
-        org.bukkit.inventory.ItemStack filler = Icon.filler(pane);
-        for (int column = 0; column < 9; column++) {
-            inventory.setItem(column, filler);
-            inventory.setItem((rows - 1) * 9 + column, filler);
-        }
-        for (int row = 1; row < rows - 1; row++) {
-            inventory.setItem(row * 9, filler);
-            inventory.setItem(row * 9 + 8, filler);
-        }
-    }
-
     /** Fill every still-empty slot with a quiet backing pane. */
     protected final void fillEmpty(@NotNull Material pane) {
         org.bukkit.inventory.ItemStack filler = Icon.filler(pane);
@@ -132,6 +138,7 @@ public abstract class Menu implements InventoryHolder {
         this.viewer = player;
         refresh();
         player.openInventory(inventory);
+        startAutoRefresh(player);
     }
 
     /** Re-render in place — icons pick up freshly-changed state immediately. */
@@ -146,6 +153,34 @@ public abstract class Menu implements InventoryHolder {
             parent.open(player);
         } else {
             player.closeInventory();
+        }
+    }
+
+    private void startAutoRefresh(@NotNull Player player) {
+        stopAutoRefresh();
+        int period = refreshEveryTicks();
+        if (period <= 0) {
+            return;
+        }
+        // repeatOn keeps every re-render on the viewer's owning thread. The
+        // open-guard reads Inventory.getViewers() — stable across the whole
+        // range — and NOT the InventoryView chain: InventoryView became an
+        // interface in 1.21, so a call compiled against the 1.17 class form
+        // would IncompatibleClassChangeError there.
+        refreshTask = gui.scheduling().repeatOn(player, period, period, () -> {
+            if (!player.isOnline() || !inventory.getViewers().contains(player)) {
+                stopAutoRefresh();
+                return;
+            }
+            refresh();
+        }, this::stopAutoRefresh);
+    }
+
+    private void stopAutoRefresh() {
+        TaskHandle task = refreshTask;
+        if (task != null) {
+            refreshTask = null;
+            task.cancel();
         }
     }
 
@@ -183,6 +218,7 @@ public abstract class Menu implements InventoryHolder {
     }
 
     final void handleClose(@NotNull InventoryCloseEvent event) {
+        stopAutoRefresh();
         if (event.getPlayer() instanceof Player player) {
             onClose(player);
         }

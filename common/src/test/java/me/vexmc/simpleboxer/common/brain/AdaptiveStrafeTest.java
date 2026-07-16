@@ -27,7 +27,7 @@ class AdaptiveStrafeTest {
             boolean horizontalCollision) {
         Perception.SelfState self = new Perception.SelfState(
                 0, 64, 0, Vec3d.ZERO, true, horizontalCollision,
-                1.0, 1.0, Perception.UseItemState.NONE, false);
+                1.0, 1.0, Perception.UseItemState.NONE, false, 0.1, -1);
         Perception.TargetState target = new Perception.TargetState(
                 3, 64, 0, 65.6, oppVelocity,
                 /* bearingToMeYaw */ 90.0, Math.abs(signedTrackRate), signedTrackRate,
@@ -45,7 +45,7 @@ class AdaptiveStrafeTest {
     private static Perception noTarget(boolean horizontalCollision) {
         Perception.SelfState self = new Perception.SelfState(
                 0, 64, 0, Vec3d.ZERO, true, horizontalCollision,
-                1.0, 1.0, Perception.UseItemState.NONE, false);
+                1.0, 1.0, Perception.UseItemState.NONE, false, 0.1, -1);
         return new Perception(self, null, Perception.TerrainView.OPEN,
                 Perception.InventoryView.EMPTY, Perception.CombatState.IDLE, 0);
     }

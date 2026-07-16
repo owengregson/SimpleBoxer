@@ -36,6 +36,15 @@ public final class LocalPathPlanner {
 
     /** Extra cost for an edge that needs a momentum jump — nudges A* toward flat routes. */
     private static final double JUMP_COST = 0.75;
+    /**
+     * Soft clearance surcharge scale, in this planner's block-cost units: entering a
+     * cell whose nearest obstruction is at Chebyshev d costs an extra 0.5·(2.5−d)/2.5
+     * — +0.3 beside it, +0.1 one cell off, 0 beyond. Enough that a one-lane berth
+     * (two extra diagonals, +0.828) beats hugging a 7-cell wall (saves 9×0.3 −
+     * 10×0.1 = 1.7), yet finite so corridors stay routable and additive to g only,
+     * so the octile heuristic stays admissible.
+     */
+    private static final double CLEARANCE_COST = 0.5;
     private static final double DIAGONAL = Math.sqrt(2.0);
     private static final double EPS = 1.0E-6;
 
@@ -86,6 +95,7 @@ public final class LocalPathPlanner {
 
         Map<Long, Double> gScore = new HashMap<>();
         Map<Long, Double> floorY = new HashMap<>();
+        Map<Long, Double> clearance = new HashMap<>(); // per-search berth memo (≤24 probes/cell)
         Map<Long, Long> cameFrom = new HashMap<>();
         Set<Long> closed = new HashSet<>();
         PriorityQueue<Frontier> open =
@@ -139,7 +149,9 @@ public final class LocalPathPlanner {
                     if (jump && !allowJump) {
                         continue; // walk-only route: go around a block-high step, not over it
                     }
-                    double edge = (diagonal ? DIAGONAL : 1.0) + (jump ? JUMP_COST : 0.0);
+                    double edge = (diagonal ? DIAGONAL : 1.0) + (jump ? JUMP_COST : 0.0)
+                            + clearance.computeIfAbsent(nKey, k ->
+                                    CLEARANCE_COST * NavGeometry.clearanceFraction(world, nx, nz, nFloor));
                     double tentative = curG + edge;
                     Double best = gScore.get(nKey);
                     if (best == null || tentative < best - EPS) {

@@ -324,14 +324,16 @@ class ClientPhysicsTest {
         world.extras.add(new Box(-5.0, 2.0, -5.0, 5.0, 3.0, 5.0));
         ClientPhysics physics = grounded(world);
         physics.step(new MoveInput(0.0, 0.0, true, false, false), 0.0f, world);
-        // 1.8 of headroom under a ceiling at 2.0: the 0.42 rise clamps to 0.2.
-        assertEquals(0.2, physics.y(), 1.0E-9, "rise clamps at the ceiling");
+        // Ceiling at 2.0 over feet at 0: the 0.42 rise clamps to the exact gap
+        // 2.0 − (double) 1.8f = 2.0 − 1.7999999523162842 = 0.20000004768371582
+        // (the float-promoted height, byte-identical to the server's box).
+        assertEquals(0.20000004768371582, physics.y(), 1.0E-9, "rise clamps at the ceiling");
         double highest = physics.y();
         for (int tick = 0; tick < 5; tick++) {
             physics.step(MoveInput.IDLE, 0.0f, world);
             highest = Math.max(highest, physics.y());
         }
-        assertEquals(0.2, highest, 1.0E-9, "never re-rises after the bump");
+        assertEquals(0.20000004768371582, highest, 1.0E-9, "never re-rises after the bump");
     }
 
     @Test
@@ -415,5 +417,70 @@ class ClientPhysicsTest {
             perTick = physics.z() - before;
         }
         assertEquals(0.098 * 0.25, perTick, 1.0E-6, "web walk displacement per tick (0.0245)");
+    }
+
+    @Test
+    void playerBoxIsByteIdenticalToTheServerRebuild() {
+        // EntityDimensions.makeBoundingBox halves the FLOAT width and promotes:
+        // (double) (0.6f / 2.0f) = 0.30000001192092896; height (double) 1.8f
+        // = 1.7999999523162842. PLAYER_WIDTH/PLAYER_HEIGHT carry the promoted
+        // values, and halving the promoted width in doubles is exact (÷2 only
+        // decrements the exponent), so the sim box equals the server rebuild
+        // bit for bit — deltas are 0.0, not tolerances.
+        assertEquals((double) 0.6f, ClientPhysics.PLAYER_WIDTH, 0.0, "width is (double) 0.6f");
+        assertEquals((double) 1.8f, ClientPhysics.PLAYER_HEIGHT, 0.0, "height is (double) 1.8f");
+        Box box = Box.player(0.0, 0.0, 0.0,
+                ClientPhysics.PLAYER_WIDTH, ClientPhysics.PLAYER_HEIGHT);
+        assertEquals(-0.30000001192092896, box.minX(), 0.0, "server half-extent, min side");
+        assertEquals(0.30000001192092896, box.maxX(), 0.0, "server half-extent, max side");
+        assertEquals(-0.30000001192092896, box.minZ(), 0.0, "server half-extent, min side");
+        assertEquals(0.30000001192092896, box.maxZ(), 0.0, "server half-extent, max side");
+        assertEquals(1.7999999523162842, box.maxY(), 0.0, "server height");
+    }
+
+    @Test
+    void flushWallRestRoundTripsToZeroServerPenetration() {
+        // A knock into the wall at z = 2 parks the box edge exactly on the wall
+        // plane: rest center = 2.0 − 0.30000001192092896 = 1.699999988079071
+        // (exact — the final approach clamp computes gap = 2.0 − maxZ, and that
+        // subtraction is exact by Sterbenz's lemma). Rebuilding the box from the
+        // claimed center with the server's promoted half-extent lands maxZ on
+        // exactly 2.0: penetration exactly 0.0 — why a vanilla client pressed
+        // into a wall is never rejected, and now the boxer isn't either.
+        FlatWorld world = stone();
+        world.extras.add(new Box(-5.0, 0.0, 2.0, 5.0, 3.0, 3.0));
+        ClientPhysics physics = grounded(world);
+        physics.applyVelocity(0.0, 0.0, 0.9);
+        for (int tick = 0; tick < 10; tick++) {
+            physics.step(MoveInput.IDLE, 0.0f, world);
+        }
+        double half = 0.30000001192092896; // (double) (0.6f / 2.0f)
+        assertEquals(2.0 - half, physics.z(), 0.0, "rest center is wallPlane - serverHalf");
+        assertEquals(2.0, physics.z() + half, 0.0,
+                "server AABB rebuild lands flush: penetration exactly 0.0");
+    }
+
+    @Test
+    void sweepBacksASubEpsilonOverlapOutInOneTick() {
+        // Paper's collideX/Y/Z keep the raw gap, negative down to −1e-7: a box
+        // that starts 1e-8 INSIDE a wall is pushed back out by its own sweep.
+        // Start center = 2.0 + 1e-8 − half = 1.699999998079071 (box edge
+        // 9.99999993922529e-9 past the plane); the sweep's gap is that same
+        // −9.99999993922529e-9 (≥ −1e-7, so the shape still clamps) and the
+        // move ships it: end center = 2.0 − half = 1.699999988079071 exactly,
+        // penetration exactly 0.0. The pre-fix clamp (max(gap, 0.0)) parked the
+        // box inside forever. The wall is the only shape on purpose — vanilla's
+        // per-shape |d| head check would zero a residual back-out if another
+        // shape followed it in the list.
+        FlatWorld world = new FlatWorld(0.6, false); // bottomless — isolate the z sweep
+        world.extras.add(new Box(-5.0, -1.0, 2.0, 5.0, 3.0, 3.0));
+        double half = 0.30000001192092896;
+        ClientPhysics physics = new ClientPhysics(0.0, 0.0, 2.0 + 1.0E-8 - half);
+        physics.applyVelocity(0.0, 0.0, 0.5);
+        physics.step(MoveInput.IDLE, 0.0f, world);
+        assertEquals(2.0 - half, physics.z(), 0.0, "backed out to exactly flush");
+        assertEquals(0.0, physics.z() + half - 2.0, 0.0, "penetration exactly 0.0");
+        assertEquals(0.0, physics.velocity().z(), 0.0, "collided axis zeroed");
+        assertTrue(physics.horizontalCollision(), "the back-out still reports the collision");
     }
 }

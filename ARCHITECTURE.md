@@ -201,9 +201,12 @@ player never needs it.
   never lets Bukkit move a real item. `Icon` builds icons against the
   cross-version common denominator (legacy §-string display API, the two
   stable item flags, a glow enchant resolved by registry KEY since the
-  constants were renamed in the 1.20.5 alignment). `ChatPrompts` captures the
-  one thing a grid of icons can't express — free text — over the legacy
-  `AsyncPlayerChatEvent` that every supported version still fires.
+  constants were renamed in the 1.20.5 alignment). Screens that show live
+  state (the roster, a boxer's panel) re-render in place every 20 ticks while
+  open, so status lore never goes stale. `ChatPrompts` captures the one thing
+  a grid of icons can't express — free text — on Paper's `AsyncChatEvent`,
+  the canonical chat event across the whole supported range (the legacy
+  `AsyncPlayerChatEvent` is no longer guaranteed to fire on modern Paper).
 - **Virtual inventory** (`api.Loadout` + `BoxerImpl`): a `Loadout` is six
   immutable, defensively-cloned equipment slots (four armor pieces, both
   hands). `equip()` publishes it from any thread and sets a dirty flag; the

@@ -24,6 +24,11 @@ import org.jetbrains.annotations.NotNull;
  *       the arm on the mouse press, hit or not. When the attack does land, it is
  *       added <em>before</em> the swing so the wire order matches vanilla
  *       (attack packet, then the arm-swing animation).</li>
+ *   <li><b>Crit-window hold.</b> While {@link CritSpam} is active this tick the
+ *       attack (never the swing) is additionally withheld unless the boxer will
+ *       be descending and airborne when the press arrives — concentrating landed
+ *       hits where the server pays critical damage, without bending the click
+ *       cadence or the rng stream.</li>
  * </ul>
  *
  * Pure and stateless: the only mutable seam is {@link ClickScheduler} (the CPS
@@ -98,6 +103,17 @@ public final class ClickController {
             // stays undisturbed on out-of-reach/off-aim ticks (deterministic misses).
             boolean lands = inReach && aimed
                     && (missChance <= 0.0 || mem.rng.nextDouble() >= missChance);
+            // Crit-spam hold: while the hop module owns the rhythm, an otherwise
+            // valid click on a rising/grounded tick withholds the ATTACK — a
+            // deliberate whiff, the arm still swings below, the CPS clock is
+            // untouched — so landed hits concentrate in the descending window
+            // where the server pays the 1.5×. Own vertical phase is judged at
+            // packet arrival, the same ping/2 extrapolation the target got. The
+            // roll above stays first so the rng stream is identical either way.
+            if (lands && CritSpam.activeThisTick(mem, p.combat().serverTick())
+                    && !CritSpam.critWindowAtArrival(p)) {
+                lands = false;
+            }
             if (lands) {
                 out.add(ActionIntent.attack());
             }

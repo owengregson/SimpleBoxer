@@ -26,7 +26,16 @@ WS5, WS4, WS3 all edit the **same** shared files (`BoxerSettings.java`, parser, 
 
 ## WS1c — Jump-into-wall glue: diagnose then fix  *(spec §1c)*
 
-Status: instrumentation + repro test landed; integration run in flight. Fix is evidence-gated.
+Status: SUPERSEDED (0.7.0). The detect-and-recover fixes this section spawned (0.6.1's escape,
+0.6.2's suppress+force-write — task 1c.2's option (a)) shipped and were then REMOVED as
+player-identity violations. The root cause was a 1.19e-8 bounding-box half-width disagreement
+(sim `0.6/2.0` in doubles vs the server's float-promoted `EntityDimensions.makeBoundingBox`
+extents) that Paper 1.21.11+/26.x's strict full-cube collision collect turns into a silent
+per-tick `CLIPPED_INTO_BLOCK` rejection loop. Fixed by byte-parity `PLAYER_WIDTH`/
+`PLAYER_HEIGHT`, Paper-parity sweep clamps, and the vanilla accept+PosRot-echo teleport
+confirm — see CHANGELOG 0.7.0. Task 1c.4 was reversed by f25cee4: the `-Dsimpleboxer.debug`
+traces are PERMANENT matrix forensics, now joined by a debug-gated `PlayerFailMoveEvent`
+listener. Do not re-ship the recovery approach from the task list below (kept as history).
 
 - [ ] **Task 1c.1 — Capture the boundary trace.** Read the run-paper log (`build/integration-test-logs/1.21.4.log`) and `run/1.21.4/plugins/SimpleBoxerTester/test-failures.txt`. Confirm whether the `movement: a boxer that jumps into a wall falls back down` test fails and whether `POSITION-CORRECTION` / `wallCollide` traces show the server teleporting the sim back up, or the entity frozen while the sim falls. Record the failing boundary.
 - [ ] **Task 1c.2 — Fix at the identified boundary.** Based on 1c.1 evidence only. Likely one of: (a) ignore/clamp self-inflicted server position-corrections while the sim is legitimately wall-collided and falling (`route()` PositionSync, `BoxerImpl.java:517`); or (b) preserve the sim's vertical in `reanchorServerPosition()` (`BoxerImpl.java:426`). Make the `MovementSuite` wall test pass.
