@@ -1,6 +1,64 @@
 # Changelog
 
-## 0.7.0 — unreleased
+## 0.7.0 — wall glue solved, potions, navigation & crit-spam
+
+Boxers now collide, confirm teleports, and re-baseline byte-for-byte like a
+vanilla client — the wall glue is fixed at its actual root and every
+detect-and-recover hack is deleted. Potions genuinely throw (and heal, and
+outlast the hotbar), navigation finds off-line stairs and keeps a human berth,
+jumps time themselves to the boxer's real speed, and a roofed melee pocket
+becomes a crit-spam opportunity. Everything still sits *upstream* of the move
+input — exactly like a real player.
+
+### Potions — they throw now
+- **Real Instant Health II.** The seeded splash pots carry the upgraded healing
+  stamp on every matrix version — resolved against the public `PotionMeta`
+  interface (the old reflection targeted the package-private CraftBukkit class
+  and threw `IllegalAccessException` on *every* version, silently degrading to
+  effect-less "empty" pots), with era fallbacks: `STRONG_HEALING` →
+  `PotionData(INSTANT_HEAL, upgraded)` → a custom effect. A failure now warns
+  once instead of degrading silently.
+- **Throws survive the spam gate.** A built `ServerboundUseItemPacket` left
+  Spigot's anti-spam `timestamp` at zero, so a connection got exactly nine
+  lifetime use-items before the server silently dropped every one — pots
+  included. The emulator now stamps the packet the way the network decode
+  constructor does, byte-identical to a real client's.
+- **The whole inventory is the reserve.** `splash-pot-count` widens to 0–36:
+  seeding overflows past the hotbar into main inventory, and the pot slot
+  restocks from anywhere in it — a boxer can spend its entire inventory of
+  pots over a fight, switching slots like a player scrolling to the next one.
+- **Fluid, confirmed healing.** The heal routine throws on the run — yaw stays
+  on the flee heading (the old routine aimed at its own feet, degenerate math
+  whipping the crosshair to world-south while it stood still), the weave kites
+  a bounded ring instead of drifting forever, and a pot only counts against
+  the budget when its `ThrownPotion` actually spawns.
+
+### Navigation — stairs, berth, and takeoffs
+- **Off-line stairs are found and climbed.** Elevation plans go straight to the
+  jump-capable search with a real budget and an adaptive extent (the old
+  walk-only first pass returned a dead-end breadcrumb *under* the target that
+  short-circuited the stair route; the old budget couldn't reach stairs ten
+  cells away), gates measure true 3D distance (they used to switch off exactly
+  at the dead end), partial routes lean toward the open frontier, and a
+  committed climb is latched until the boxer actually gains the level — a
+  waypoint is a floor cell, consumed only when stood on. Real stair blocks
+  read as two half-steps, the way a client walks them.
+- **A human berth.** Both planners charge a soft clearance surcharge and the
+  steering ring carries lateral wall danger, so a boxer rounds obstacles a
+  couple of blocks wide like a person instead of hugging the geometry — while
+  corridors stay passable.
+- **Speed-scaled jump timing.** The step-hop trigger is a time-to-contact
+  takeoff window computed from the boxer's actual movement speed (the
+  attribute now rides the perception line into the brain), so Speed I/II
+  boxers leave the ground early enough to clear a block with momentum intact;
+  route ascents schedule their takeoffs from the waypoint's step face.
+
+### Combat — crit-spam under a roof
+- **Roof-aware crit-spam.** With a solid ceiling three blocks up, a boxer in
+  the melee pocket hops in pulsed jumps (the bonk cycle restarts the fall
+  almost immediately), gates its attacks to the descending, crit-eligible
+  half of each hop, and drops sprint for the click the way the 1.9+ attack
+  path demands — real inputs, real packets, `combat.crit-spam` to taste.
 
 ### GUI
 - **Four-door hub.** `/boxer` now opens exactly four doors — Spawn, Manage,
@@ -79,7 +137,12 @@
   cadence), `ROTATE_DELTA` rotation of kept velocity in 1.21.2+ teleports, and
   collision-view parity for the world border / hard entity colliders / context-dependent
   block shapes / sneak pose — latent one-off divergence classes, none of them this glue's
-  seed.
+  seed. Two more, found during verification: the sim stamps `horizontalCollision` and
+  zeroes axis velocity on exact `!=` where vanilla uses `Mth.equal`'s ~1e-5 tolerance
+  (the sim flags sub-epsilon clamps a client ignores — cosmetic), and `MotorQuantizer`'s
+  0.35 deadband can turn a steering-approved heading with a small ledge-ward component
+  into a full diagonal key press, overshooting the point the ledge probe validated — a
+  `!mayLeaveLedges` goal can still creep over a lip under sprint momentum.
 
 ## 0.6.2 — wall-glue fix, properly
 
