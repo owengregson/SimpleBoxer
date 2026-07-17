@@ -19,6 +19,22 @@ class BrainTest {
 
     private static final long SEED = 0xB0EA7L;
 
+    /**
+     * The drop-budget cap must FIT the collision-query contract: the deep
+     * ground scan issues a column {@code SAFE_DROP_CAP + 1} blocks tall and a
+     * block-grid implementation walks one border row past each end, so
+     * {@code SAFE_DROP_CAP + 3} rows must survive any implementation's
+     * defensive clamp. When this failed (the Bukkit view clamped Y to 8), the
+     * scan lost the very surface the boxer stood on: every direction read
+     * ledge-ward and the ledge guard froze all movement keys on every version.
+     */
+    @Test
+    void dropBudgetCapFitsTheCollisionQueryContract() {
+        assertTrue(Brain.SAFE_DROP_CAP + 3.0 <= CollisionView.DEEP_SCAN_COLUMN_BLOCKS,
+                "SAFE_DROP_CAP + 3 must fit DEEP_SCAN_COLUMN_BLOCKS; raising the cap"
+                        + " requires raising the contract height with it");
+    }
+
     /** Runs the brain→physics loop for a static target and returns the final physics state. */
     private static ClientPhysics run(BoxerSettings settings, ClientPhysics phys,
             CollisionView world, Vec3d target, int ticks) {

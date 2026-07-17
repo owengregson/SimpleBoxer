@@ -20,9 +20,22 @@ import org.jetbrains.annotations.Nullable;
  */
 final class BukkitCollisionView implements CollisionView {
 
-    /** Queries are clamped to this many blocks per axis — a runaway motion
-     * vector must not iterate half the world. */
-    private static final int MAX_EXTENT = 8;
+    /** Horizontal queries are clamped to this many blocks per axis — a runaway
+     * motion vector must not iterate half the world. */
+    private static final int MAX_EXTENT_XZ = 8;
+    /**
+     * The vertical clamp is sized to the {@link CollisionView} contract instead:
+     * the brain's deep ground scan ({@code NavGeometry.deepGroundHeight})
+     * legitimately queries a single column up to {@code SAFE_DROP_CAP + 1} = 17
+     * blocks tall, plus the ±1 border rows this walk adds. Clamping Y to the
+     * horizontal 8 (as this once did) kept only the BOTTOM eight rows of that
+     * column and cut off the surface the boxer stands on, so over any platform
+     * with air beneath — every flat test arena — the scan read "no ground
+     * within budget", every direction read ledge-ward, and the ledge guard
+     * froze all movement keys on every version at once, with no exception to
+     * trace. Pinned by {@code BukkitCollisionViewColumnTest}.
+     */
+    private static final int MAX_EXTENT_Y = CollisionView.DEEP_SCAN_COLUMN_BLOCKS;
 
     private final World world;
 
@@ -38,9 +51,9 @@ final class BukkitCollisionView implements CollisionView {
         int maxX = floor(region.maxX()) + 1;
         int maxY = floor(region.maxY()) + 1;
         int maxZ = floor(region.maxZ()) + 1;
-        maxX = Math.min(maxX, minX + MAX_EXTENT);
-        maxY = Math.min(maxY, minY + MAX_EXTENT);
-        maxZ = Math.min(maxZ, minZ + MAX_EXTENT);
+        maxX = Math.min(maxX, minX + MAX_EXTENT_XZ);
+        maxY = Math.min(maxY, minY + MAX_EXTENT_Y);
+        maxZ = Math.min(maxZ, minZ + MAX_EXTENT_XZ);
 
         List<Box> boxes = new ArrayList<>();
         for (int x = minX; x <= maxX; x++) {

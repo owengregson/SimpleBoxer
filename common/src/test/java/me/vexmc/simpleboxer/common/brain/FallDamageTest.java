@@ -47,6 +47,18 @@ class FallDamageTest {
     }
 
     @Test
+    void degenerateTraitInputsStillYieldAFiniteBudget() {
+        // A trait chain gone wrong (NaN health/safe-fall/multiplier) must produce
+        // a FINITE, conservative budget — never NaN: the int return makes
+        // (int) NaN collapse to 0, and Brain's Math.min(SAFE_DROP_CAP, 0) then
+        // stays 0 (a budget of NaN would poison every ledge probe comparison and
+        // read every direction as a ledge — a frozen boxer with no exception).
+        assertEquals(0, FallDamage.maxSafeFallBlocks(Double.NaN, 0, 3.0, 1.0, false));
+        assertEquals(0, FallDamage.maxSafeFallBlocks(10.0, 0, Double.NaN, 1.0, false));
+        assertEquals(0, FallDamage.maxSafeFallBlocks(10.0, 0, 3.0, Double.NaN, false));
+    }
+
+    @Test
     void predictedPointsMatchTheForwardFormula() {
         // 5-block drop, no gear: ceil(5 − 3) × 1.0 = 2 points (one heart).
         assertEquals(2.0, FallDamage.predictedPoints(5.0, 3.0, 0, 1.0, false), 1.0E-9);
