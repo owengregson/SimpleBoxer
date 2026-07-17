@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.7.1 — unreleased
+## 0.7.1 — the ledge guard covers the keys
 
 ### Navigation
 - **The ledge guard now covers the keys, not just the heading.** Closing the
