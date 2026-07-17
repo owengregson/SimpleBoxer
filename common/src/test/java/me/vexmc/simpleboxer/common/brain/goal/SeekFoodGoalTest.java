@@ -36,7 +36,7 @@ class SeekFoodGoalTest {
             double distance) {
         Perception.SelfState self = new Perception.SelfState(
                 0.0, 64.0, 0.0, Vec3d.ZERO, true, false, 1.0, hungerPct,
-                Perception.UseItemState.NONE, false, 0.1, -1);
+                Perception.UseItemState.NONE, false, 0.1, -1, 20.0, 0, 3.0, 1.0, false);
         Perception.TargetState target = hasTarget
                 ? new Perception.TargetState(distance, 64.0, 0.0, 65.6, Vec3d.ZERO,
                         0.0, 0.0, 0.0, distance, false)

@@ -135,10 +135,17 @@ final class BoxerImpl implements Boxer {
     /**
      * The last matured {@link PlayerTraits} snapshot, mirrored into
      * {@link Perception.SelfState} so the brain times its jumps from the same
-     * aged walk-speed / jump-boost values the integrator runs on.
+     * aged walk-speed / jump-boost values the integrator runs on — and prices
+     * deliberate ledge drops from the same aged fall block (max health, worn
+     * EPF, safe-fall distance, multiplier, Slow Falling).
      */
     private double knownWalkSpeed = ClientPhysics.DEFAULT_WALK_SPEED;
     private int knownJumpBoost = -1;
+    private double knownMaxHealth = 20.0;
+    private int knownFallEpf;
+    private double knownSafeFall = 3.0;
+    private double knownFallDamageMultiplier = 1.0;
+    private boolean knownSlowFalling;
     /** Previous matured target yaw, for the opponent-aim tracking-rate estimate. */
     private float prevTargetYaw;
     private boolean hasPrevTargetYaw;
@@ -356,6 +363,11 @@ final class BoxerImpl implements Boxer {
             // values the integrator was just tuned with.
             knownWalkSpeed = knownTraits.walkSpeed();
             knownJumpBoost = knownTraits.jumpBoostAmplifier();
+            knownMaxHealth = knownTraits.maxHealth();
+            knownFallEpf = knownTraits.fallEpf();
+            knownSafeFall = knownTraits.safeFallDistance();
+            knownFallDamageMultiplier = knownTraits.fallDamageMultiplier();
+            knownSlowFalling = knownTraits.slowFalling();
         }
 
         // 2. Decide via the brain, unless paused (a paused client still receives
@@ -674,7 +686,8 @@ final class BoxerImpl implements Boxer {
                 healthPct(), hungerPct(),
                 usingItemTicks > 0 ? Perception.UseItemState.USING : Perception.UseItemState.NONE,
                 safeIsBlocking(spawned.player()),
-                knownWalkSpeed, knownJumpBoost);
+                knownWalkSpeed, knownJumpBoost, knownMaxHealth, knownFallEpf,
+                knownSafeFall, knownFallDamageMultiplier, knownSlowFalling);
 
         Perception.TargetState targetState = null;
         TargetView view = perceived;

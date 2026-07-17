@@ -6,6 +6,7 @@ import me.vexmc.simpleboxer.common.physics.Vec3d;
 import me.vexmc.simpleboxer.common.settings.BoxerSettings;
 import org.junit.jupiter.api.Test;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -39,7 +40,8 @@ class BrainTest {
         double bearingToMe = Math.toDegrees(Math.atan2(-(bx - target.x()), (bz - target.z())));
         Perception.SelfState self = new Perception.SelfState(
                 bx, phys.y(), bz, phys.velocity(), phys.onGround(), phys.horizontalCollision(),
-                1.0, 1.0, Perception.UseItemState.NONE, false, 0.1, -1);
+                1.0, 1.0, Perception.UseItemState.NONE, false, 0.1, -1,
+                20.0, 0, 3.0, 1.0, false);
         Perception.TargetState tgt = new Perception.TargetState(
                 target.x(), target.y(), target.z(), target.y() + 1.62, Vec3d.ZERO,
                 bearingToMe, 0.0, 0.0, distance, false);
@@ -199,8 +201,10 @@ class BrainTest {
 
     /**
      * Follower resilience: a 1-cell strafe by the platform player must NOT dissolve
-     * a committed climb — the latch holds the route and the replan throttle keeps
-     * the swap attempt from thrashing.
+     * a committed climb — the latch holds the route, and the replacement search is
+     * throttled so the swap attempt cannot thrash. (The route mints a few ticks in
+     * now: the elevation gate needs its 10-tick gap persistence and the sliced
+     * search a few 50-expansion ticks.)
      */
     @Test
     void committedClimbSurvivesTargetCellChanges() {
@@ -208,12 +212,163 @@ class BrainTest {
         ClientPhysics phys = new ClientPhysics(0.5, 64, 0.5);
         Brain brain = new Brain(BoxerSettings.DEFAULTS, SEED, 0.0f, 0.0f);
 
-        brain.tick(perceive(phys, new Vec3d(9.5, 67, 0.5)), world, 0L);
-        assertTrue(brain.memory().path != null, "an elevated target must mint a climb route");
+        int minted = -1;
+        for (int i = 0; i < 120 && minted < 0; i++) {
+            brain.tick(perceive(phys, new Vec3d(9.5, 67, 0.5)), world, i * 50L);
+            if (brain.memory().path != null) {
+                minted = i;
+            }
+        }
+        assertTrue(minted >= 0, "an elevated target must mint a climb route");
         assertTrue(brain.memory().climbLatch, "and arm the climb latch");
 
-        brain.tick(perceive(phys, new Vec3d(8.5, 67, 1.5)), world, 50L);
+        brain.tick(perceive(phys, new Vec3d(8.5, 67, 1.5)), world, (minted + 1) * 50L);
         assertTrue(brain.memory().path != null, "a 1-cell strafe must not dissolve the climb");
         assertTrue(brain.memory().climbLatch, "the latch holds until the level is reached");
+    }
+
+    /**
+     * Requirement (4) end-to-end: a 3×3 pillar (top 69) over the floor (64),
+     * target 6 out. Default traits (max health 20 → budget 10 points → 13 safe
+     * blocks; the 5-drop costs ceil(5−3) = 2) let the corridor probe validate
+     * the line — the boxer walks off at pace and closes. No plan is ever needed.
+     */
+    @Test
+    void dropsOffALedgeToATargetBelow() {
+        FakeWorld world = FakeWorld.floorAt(64).wall(-1, 64, -1, 1, 68, 1);
+        ClientPhysics phys = new ClientPhysics(0.5, 69, 0.5);
+        Vec3d target = new Vec3d(6.5, 64, 0.5);
+        run(BoxerSettings.DEFAULTS, phys, world, target, 200);
+        assertTrue(phys.y() < 64.5, "the boxer took the drop (y=" + phys.y() + ")");
+        assertTrue(horizontalDistance(phys, target) < 3.0,
+                "and closed on the target below (dist " + horizontalDistance(phys, target) + ")");
+    }
+
+    /**
+     * Requirement (2): while a sliced search grinds against an UNREACHABLE
+     * floating platform (space-exhausting flood, adopted by nobody — the
+     * Y-progress gate refuses its partials), the boxer must keep moving: on at
+     * least 40% of the search-active ticks the motor holds a movement key (the
+     * bar sits below the duty cycle on purpose, so ticks spent in
+     * POOR_CANDIDATE_SPEED slides against the platform face cannot flake it).
+     */
+    @Test
+    void keepsSteeringWhileASlicedSearchRuns() {
+        FakeWorld world = FakeWorld.floorAt(64).wall(8, 65, -1, 10, 67, 1); // top 68, sheer
+        ClientPhysics phys = new ClientPhysics(0.5, 64, 0.5);
+        Brain brain = new Brain(BoxerSettings.DEFAULTS, SEED, 0.0f, 0.0f);
+        Vec3d target = new Vec3d(9.5, 68, 0.5);
+        int searchTicks = 0;
+        int movingSearchTicks = 0;
+        for (int i = 0; i < 120; i++) {
+            BrainOutput out = brain.tick(perceive(phys, target), world, i * 50L);
+            if (brain.memory().search != null) {
+                searchTicks++;
+                if (out.move().forward() != 0.0 || out.move().strafe() != 0.0) {
+                    movingSearchTicks++;
+                }
+            }
+            phys.step(out.move(), out.aimYaw(), world);
+        }
+        assertTrue(searchTicks >= 10,
+                "the flooding search must span many ticks (got " + searchTicks + ")");
+        assertTrue(movingSearchTicks * 5 >= searchTicks * 2,
+                "steering keeps driving while the search flies ("
+                        + movingSearchTicks + "/" + searchTicks + ")");
+    }
+
+    /**
+     * Requirement (3): a simulated combo (hits landing every 15 ticks) against a
+     * platform target 4 blocks away — inside the hold band with a persistent
+     * 3-block gap that would otherwise open the elevation gate — creates NO plan
+     * state whatsoever for the whole exchange; once the window lapses the search
+     * resumes. The boxer is held static so the anti-stuck rescue path is armed
+     * too (it must be equally excluded).
+     */
+    @Test
+    void combatHoldSuppressesAllPlanningDuringACombo() {
+        FakeWorld world = elevatedArena();
+        ClientPhysics phys = new ClientPhysics(5.5, 64, 0.5); // 4.0 horizontal from the target
+        Brain brain = new Brain(BoxerSettings.DEFAULTS, SEED, 0.0f, 0.0f);
+        Vec3d target = new Vec3d(9.5, 67, 0.5);
+        for (int i = 0; i < 70; i++) {
+            if (i % 15 == 0) {
+                brain.onHitLanded(); // the combo keeps re-stamping the window
+            }
+            brain.tick(perceive(phys, target), world, i * 50L);
+            assertTrue(brain.memory().search == null,
+                    "no search may open or step mid-combo (tick " + i + ")");
+            assertTrue(brain.memory().path == null,
+                    "no route may mint mid-combo (tick " + i + ")");
+        }
+        int resumed = -1;
+        for (int i = 70; i < 200 && resumed < 0; i++) {
+            brain.tick(perceive(phys, target), world, i * 50L);
+            if (brain.memory().search != null || brain.memory().path != null) {
+                resumed = i;
+            }
+        }
+        assertTrue(resumed >= 0, "once the hold lapses the elevation search resumes");
+    }
+
+    /**
+     * The dy-persistence hysteresis: 9-tick bursts of elevation gap (with a
+     * level-target tick between bursts) never open the gate; the 10th
+     * CONSECUTIVE tick does. The boxer walks (physics stepped) so anti-stuck
+     * stays quiet, and the platform sits far enough out (25 cells) that the
+     * corridor horizon can't preempt the gate.
+     */
+    @Test
+    void elevationGateNeedsAPersistentGap() {
+        FakeWorld world = FakeWorld.floorAt(64).wall(24, 65, -1, 26, 66, 1); // slab top 67
+        ClientPhysics phys = new ClientPhysics(0.5, 64, 0.5);
+        Brain brain = new Brain(BoxerSettings.DEFAULTS, SEED, 0.0f, 0.0f);
+        Vec3d raised = new Vec3d(25.5, 67, 0.5);
+        Vec3d level = new Vec3d(10.5, 64, 0.5);
+        int tick = 0;
+        for (int cycle = 0; cycle < 4; cycle++) {
+            for (int k = 0; k < 9; k++) {
+                BrainOutput out = brain.tick(perceive(phys, raised), world, tick++ * 50L);
+                phys.step(out.move(), out.aimYaw(), world);
+                assertTrue(brain.memory().search == null && brain.memory().path == null,
+                        "9 consecutive gap ticks must never open the gate (tick " + tick + ")");
+            }
+            BrainOutput out = brain.tick(perceive(phys, level), world, tick++ * 50L);
+            phys.step(out.move(), out.aimYaw(), world); // the transient ends — counter resets
+        }
+        for (int k = 0; k < Brain.ELEVATION_GAP_PERSIST_TICKS; k++) {
+            BrainOutput out = brain.tick(perceive(phys, raised), world, tick++ * 50L);
+            phys.step(out.move(), out.aimYaw(), world);
+        }
+        assertTrue(brain.memory().search != null,
+                "the 10th consecutive gap tick opens the gate");
+    }
+
+    /**
+     * Stall report A4's fix: the w-tap release window (EngageGoal returns a zero
+     * desired) must HOLD a committed route — every landed hit used to wipe it.
+     */
+    @Test
+    void wtapReleaseWindowHoldsTheCommittedRoute() {
+        FakeWorld world = elevatedArena();
+        ClientPhysics phys = new ClientPhysics(0.5, 64, 0.5);
+        Brain brain = new Brain(BoxerSettings.DEFAULTS, SEED, 0.0f, 0.0f);
+        Vec3d target = new Vec3d(9.5, 67, 0.5);
+        int minted = -1;
+        for (int i = 0; i < 120 && minted < 0; i++) {
+            brain.tick(perceive(phys, target), world, i * 50L);
+            if (brain.memory().path != null) {
+                minted = i;
+            }
+        }
+        assertTrue(minted >= 0, "a climb route must mint first");
+        int cursor = brain.memory().pathCursor;
+
+        brain.memory().wtapReleaseLeft = 2; // simulate a landed hit's release window
+        brain.tick(perceive(phys, target), world, (minted + 1) * 50L);
+        brain.tick(perceive(phys, target), world, (minted + 2) * 50L);
+        assertTrue(brain.memory().path != null,
+                "the release window must HOLD the route, not wipe it");
+        assertEquals(cursor, brain.memory().pathCursor, "exactly where it left off");
     }
 }

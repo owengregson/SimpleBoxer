@@ -34,7 +34,8 @@ class EngageGoalTest {
     private static Perception at(double distance) {
         Perception.SelfState self = new Perception.SelfState(
                 0, 64, 0, Vec3d.ZERO, true, false,
-                1.0, 1.0, Perception.UseItemState.NONE, false, 0.1, -1);
+                1.0, 1.0, Perception.UseItemState.NONE, false, 0.1, -1,
+                20.0, 0, 3.0, 1.0, false);
         Perception.TargetState target = new Perception.TargetState(
                 distance, 64, 0, 65.62, Vec3d.ZERO,
                 90.0, 0.0, 0.0, distance, false);
@@ -94,7 +95,8 @@ class EngageGoalTest {
     private static Perception holding(int selectedSlot) {
         Perception.SelfState self = new Perception.SelfState(
                 0, 64, 0, Vec3d.ZERO, true, false,
-                1.0, 1.0, Perception.UseItemState.NONE, false, 0.1, -1);
+                1.0, 1.0, Perception.UseItemState.NONE, false, 0.1, -1,
+                20.0, 0, 3.0, 1.0, false);
         Perception.TargetState target = new Perception.TargetState(
                 6.0, 64, 0, 65.62, Vec3d.ZERO,
                 90.0, 0.0, 0.0, 6.0, false);

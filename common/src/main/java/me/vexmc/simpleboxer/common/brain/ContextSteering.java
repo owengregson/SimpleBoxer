@@ -53,10 +53,11 @@ public final class ContextSteering {
 
     /** Base cost of stepping toward a ledge; scaled by travel speed below. */
     private static final double LEDGE_PENALTY = 5.0;
-    /** How far down we still consider "ground" before a drop counts as a ledge.
-     *  Package-visible: {@link LedgeKeyGuard} re-probes the QUANTIZED key
-     *  direction against the same drop budget, so the two layers agree on what
-     *  a ledge is. */
+    /** The DEFAULT drop budget, for ledge-averse goals (flee/heal/retreat) and
+     *  every caller that names no budget of its own. Pursuit goals thread the
+     *  dynamic fall-damage budget instead; {@link LedgeKeyGuard} re-probes the
+     *  QUANTIZED key direction against the caller's same budget, so the layers
+     *  always agree on what a ledge is. */
     static final double LEDGE_MAX_DROP = 3.0;
     /** A ledge is dangerous even at a crawl, but much worse at a sprint. */
     private static final double LEDGE_MIN_FACTOR = 0.3;
@@ -113,11 +114,19 @@ public final class ContextSteering {
      */
     public @NotNull MoveHeading steer(@NotNull Perception p, @NotNull Vec3d desiredDirWorld,
             @NotNull CollisionView world) {
-        return steer(p, desiredDirWorld, world, false);
+        return steer(p, desiredDirWorld, world, LEDGE_MAX_DROP);
     }
 
+    /**
+     * As above with the caller's drop budget: {@code maxDropBudget} is the
+     * deepest drop (blocks) this tick's goal will deliberately walk off —
+     * {@link #LEDGE_MAX_DROP} for ledge-averse goals, the dynamic fall-damage
+     * budget for pursuit. An edge with ground inside the budget is not a ledge
+     * at all (no cost, no sneak — a real client steps off at pace); a deeper
+     * one costs speed-scaled danger for EVERY goal, pursuit included.
+     */
     public @NotNull MoveHeading steer(@NotNull Perception p, @NotNull Vec3d desiredDirWorld,
-            @NotNull CollisionView world, boolean mayLeaveLedges) {
+            @NotNull CollisionView world, double maxDropBudget) {
         Vec3d desired = desiredDirWorld.horizontalNormalized();
         if (desired.lengthSqr() < 1.0E-8) {
             return MoveHeading.STILL; // no goal direction — hold position
@@ -125,12 +134,11 @@ public final class ContextSteering {
 
         Perception.SelfState self = p.self();
         Box box = NavGeometry.playerBox(self.x(), self.y(), self.z());
-        // A ledge is only dangerous in proportion to how fast we'd sail off it —
-        // unless this is a pursuit that MAY leave ledges (chasing a target off an
-        // edge like a real client), in which case the drop costs nothing.
+        // A beyond-budget ledge is only dangerous in proportion to how fast we'd
+        // sail off it (drops inside the budget never register as ledges at all).
         double speedFactor = Math.min(1.0, self.velocity().horizontalLength() / REFERENCE_SPEED);
-        double ledgeCost = mayLeaveLedges ? 0.0
-                : LEDGE_PENALTY * (LEDGE_MIN_FACTOR + (1.0 - LEDGE_MIN_FACTOR) * speedFactor);
+        double ledgeCost =
+                LEDGE_PENALTY * (LEDGE_MIN_FACTOR + (1.0 - LEDGE_MIN_FACTOR) * speedFactor);
 
         // Lateral clearance is OPEN-TRAVEL shaping only: with the desired heading
         // hard-blocked the boxer needs the classic along-wall slide (penalizing the
@@ -150,7 +158,7 @@ public final class ContextSteering {
             // Candidate 0 = +X (East); map angle onto the XZ plane as (cos, sin).
             cand[i] = new Vec3d(Math.cos(theta), 0.0, Math.sin(theta));
             rawDot[i] = cand[i].dot(desired);
-            primary[i] = danger(world, box, cand[i], ledgeCost);
+            primary[i] = danger(world, box, cand[i], ledgeCost, maxDropBudget);
             lateral[i] = lateralActive ? lateralDanger(world, box, cand[i]) : 0.0;
             if (primary[i] < WALL_PENALTY && lateral[i] < lateralFloor) {
                 lateralFloor = lateral[i]; // corridors: every open line pays — normalize it out
@@ -194,19 +202,19 @@ public final class ContextSteering {
         // term is off whenever desired is blocked, so the gates here see exactly the
         // classic danger values.)
         Vec3d graze = obliqueGraze(world, box, desired, bestDir, bestDanger, speedFactor,
-                mayLeaveLedges);
+                maxDropBudget);
         if (graze != null) {
-            boolean grazeLedge = !mayLeaveLedges && NavGeometry.ledgeAhead(world, box, graze,
-                    NavGeometry.LOOK_AHEAD, LEDGE_MAX_DROP);
+            boolean grazeLedge = NavGeometry.ledgeAhead(world, box, graze,
+                    NavGeometry.LOOK_AHEAD, maxDropBudget);
             // A grazing slide is a compromised heading: ease off so collide's slide
             // stays controlled (the motor duty-cycles the digital forward).
             return new MoveHeading(graze, grazeLedge, POOR_CANDIDATE_SPEED);
         }
 
-        // A pursuit that may leave ledges must not then crawl-sneak off the edge:
-        // suppress the near-ledge ease-off so it steps off at pace toward the target.
-        boolean nearLedge = !mayLeaveLedges && NavGeometry.ledgeAhead(world, box, bestDir,
-                NavGeometry.LOOK_AHEAD, LEDGE_MAX_DROP);
+        // Within-budget drops never read as ledges, so a deliberate descent steps
+        // off at pace; the ease-off below fires only for genuinely deep edges.
+        boolean nearLedge = NavGeometry.ledgeAhead(world, box, bestDir,
+                NavGeometry.LOOK_AHEAD, maxDropBudget);
         // Ease off only when we're settling for a compromised heading — either
         // something still dangerous ahead, or no candidate makes real progress.
         // Lateral clearance shapes SELECTION only: a berth line is not a compromised
@@ -219,10 +227,10 @@ public final class ContextSteering {
     /**
      * Total danger for driving {@code cand}: a heavy penalty for a wall right
      * ahead, a light one for a tall obstacle a bit further along the body/head
-     * band, and a speed-scaled ledge cost.
+     * band, and a speed-scaled cost for a drop beyond the caller's budget.
      */
     private static double danger(@NotNull CollisionView world, @NotNull Box box,
-            @NotNull Vec3d cand, double ledgeCost) {
+            @NotNull Vec3d cand, double ledgeCost, double maxDropBudget) {
         double danger = 0.0;
         if (NavGeometry.wallAhead(world, box, cand, NavGeometry.LOOK_AHEAD)) {
             danger += WALL_PENALTY;
@@ -230,7 +238,7 @@ public final class ContextSteering {
         if (NavGeometry.wallAhead(world, box, cand, FAR_LOOK_AHEAD)) {
             danger += FAR_WALL_PENALTY;
         }
-        if (NavGeometry.ledgeAhead(world, box, cand, NavGeometry.LOOK_AHEAD, LEDGE_MAX_DROP)) {
+        if (NavGeometry.ledgeAhead(world, box, cand, NavGeometry.LOOK_AHEAD, maxDropBudget)) {
             danger += ledgeCost;
         }
         return danger;
@@ -284,11 +292,11 @@ public final class ContextSteering {
      * (an oblique glance). Then a candidate qualifies only if it is nearer to
      * desired than {@code bestDir}, clear within the speed-scaled graze look-ahead
      * (so {@code ClientPhysics.collide} slides it rather than stopping it), and does
-     * not step off a ledge (unless pursuit may).
+     * not step off a drop beyond the caller's budget.
      */
     private static Vec3d obliqueGraze(@NotNull CollisionView world, @NotNull Box box,
             @NotNull Vec3d desired, @NotNull Vec3d bestDir, double bestDanger,
-            double speedFactor, boolean mayLeaveLedges) {
+            double speedFactor, double maxDropBudget) {
         boolean desiredBlocked = NavGeometry.wallAhead(world, box, desired, NavGeometry.LOOK_AHEAD);
         boolean bestGlances = bestDanger < WALL_PENALTY && bestDir.dot(desired) > OBLIQUE_SLIDE_MIN;
         if (!desiredBlocked || !bestGlances) {
@@ -311,9 +319,8 @@ public final class ContextSteering {
             if (NavGeometry.wallAhead(world, box, cand, grazeAhead)) {
                 continue; // a wall even at the graze reach — too head-on to slide
             }
-            if (!mayLeaveLedges
-                    && NavGeometry.ledgeAhead(world, box, cand, NavGeometry.LOOK_AHEAD, LEDGE_MAX_DROP)) {
-                continue; // don't graze off a ledge
+            if (NavGeometry.ledgeAhead(world, box, cand, NavGeometry.LOOK_AHEAD, maxDropBudget)) {
+                continue; // don't graze off a beyond-budget ledge
             }
             graze = cand;
             bestDot = dot;
