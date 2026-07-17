@@ -168,6 +168,13 @@ public final class Brain {
         // heading.speedScale() < 1 and sneak near a ledge, keyed off a monotonic phase.
         MoveInput move = motor.toInput(heading, aim.yaw(), wantSprint, jump, false,
                 memory.motorTick++);
+        // The deadband can promote a small steering-approved ledge-ward component
+        // into a full diagonal key press — re-check the REALIZED key direction
+        // against the same drop budget steering used, releasing a key over the lip.
+        if (!decision.goal().mayLeaveLedges() && !heading.isStill()) {
+            move = LedgeKeyGuard.mask(move, heading, aim.yaw(), world,
+                    NavGeometry.playerBox(p.self().x(), p.self().y(), p.self().z()));
+        }
 
         // 3. Actions: the goal/routine's item action, then CPS-clocked clicks.
         List<ActionIntent> actions = new ArrayList<>(2);
