@@ -375,7 +375,10 @@ final class BoxerImpl implements Boxer {
             syncSprint(out.sprintDesire());
         }
         queueInput(input, now);
-        physics.step(input, aimYaw, collisionView);
+        // The integrator gets the item-use state (vanilla's client-only ×0.2
+        // input slowdown); the wire input packet carries no such bit, so
+        // queueInput above ships the raw keys exactly as a real client's does.
+        physics.step(input.withUsingItem(usingItemTicks > 0), aimYaw, collisionView);
         pushAwayFromNeighbors();
 
         // Matrix forensics: trace the sim vs server-entity Y whenever the boxer is
@@ -931,8 +934,13 @@ final class BoxerImpl implements Boxer {
             actions.offer(new Action.SelectSlot(select.slot()), now);
         } else if (action instanceof ActionIntent.StartUse use) {
             actions.offer(new Action.UseItem(use.mainHand()), now);
+            // A real client's isUsingItem flips the tick it clicks — the packet
+            // ships later, but the ×0.2 input slowdown starts NOW. The dispatch
+            // refresh keeps a driven hold alive; a momentary use lapses.
+            usingItemTicks = 4;
         } else if (action instanceof ActionIntent.ReleaseUse) {
             actions.offer(new Action.ReleaseUse(), now);
+            usingItemTicks = 0;
         }
     }
 
@@ -1041,6 +1049,13 @@ final class BoxerImpl implements Boxer {
         if (sprintActionsInFlight == 0 && serverSprinting
                 && !spawned.player().isSprinting()) {
             serverSprinting = false;
+        }
+        // canStartSprinting has !isUsingItem() on every version: an ongoing
+        // sprint SURVIVES item use (the whole point of blockhitting), but a
+        // stopped one cannot re-arm until the use ends — mirror that here so
+        // a mid-block re-arm never ships a packet a client couldn't send.
+        if (sprinting && !serverSprinting && usingItemTicks > 0) {
+            return;
         }
         if (serverSprinting == sprinting) {
             return;
