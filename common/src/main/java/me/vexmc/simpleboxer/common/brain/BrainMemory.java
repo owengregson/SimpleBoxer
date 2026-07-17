@@ -132,4 +132,33 @@ public final class BrainMemory {
         this.path = null;
         this.pathCursor = 0;
     }
+
+    /**
+     * Respawn reset: a new life starts with no routine mid-episode, no committed
+     * route, and no combo state — death ended them all. Only the rng (identity
+     * determinism) and the motor duty phase survive. The position history
+     * re-seeds at the respawn point so anti-stuck cannot read the
+     * death-to-spawn relocation as a burst of travel.
+     */
+    public void onRespawn() {
+        incumbentGoal = null;
+        dwellTicks = 0;
+        strafeSign = 1;
+        strafeFlipIn = 0;
+        wtapCountdown = -1;
+        wtapReleaseLeft = 0;
+        wtapRepressed = false;
+        climbTicks = 0;
+        clearPath();
+        lastPlanTick = Long.MIN_VALUE;
+        lastGoalCell = Long.MIN_VALUE;
+        climbLatch = false;
+        climbGoalY = 0.0;
+        waypointTicks = 0;
+        routeStepFace = Double.NaN;
+        routeStepRise = 0.0;
+        posSeeded = false;
+        intScratch.clear();
+        doubleScratch.clear();
+    }
 }

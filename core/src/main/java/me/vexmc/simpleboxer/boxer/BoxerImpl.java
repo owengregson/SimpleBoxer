@@ -523,6 +523,7 @@ final class BoxerImpl implements Boxer {
                 Location location = spawned.player().getLocation();
                 physics.teleport(location.getX(), location.getY(), location.getZ());
                 brain.snapAim(location.getYaw(), location.getPitch());
+                brain.onRespawn();
                 aimYaw = location.getYaw();
                 aimPitch = location.getPitch();
                 declareClientLoaded();

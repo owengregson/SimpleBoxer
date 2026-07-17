@@ -38,6 +38,11 @@ public final class EngageGoal implements Goal {
      */
     private static final double ORBIT_INBAND_FORWARD = 0.35;
 
+    /** Scratch id for the weapon re-select throttle. */
+    private static final String RESELECT_ID = "engageSlot";
+    /** Decision ticks between re-select retries — covers a laggy action line's RTT. */
+    private static final int RESELECT_RETRY_TICKS = 10;
+
     private final Supplier<BoxerSettings> settings;
     private final AdaptiveStrafe strafe;
 
@@ -70,6 +75,24 @@ public final class EngageGoal implements Goal {
         Perception.SelfState self = p.self();
         Intent.FacingIntent facing = Intent.FacingIntent.aimAt(t.x(), t.eyeY() - 0.4, t.z());
 
+        // A fighter checks its sword hand. Routines swap to their tool slot and
+        // restore the weapon only in their own exit phase, so death (or any
+        // interruption) mid-routine leaves the pot/rod/food slot selected into
+        // the next life — every punch then misuses the tool and a blockhit tap
+        // THROWS a held splash pot. When this goal owns the tick the weapon slot
+        // is the baseline: re-select it whenever the held slot disagrees,
+        // throttled so the command is not re-sent while the previous one is
+        // still in flight on the action latency line.
+        Intent.ActionIntent action = Intent.ActionIntent.none();
+        int[] reselect = mem.ints(RESELECT_ID, 1);
+        if (reselect[0] > 0) {
+            reselect[0]--;
+        }
+        if (p.inv().selectedSlot() != s.items().weaponSlot() && reselect[0] == 0) {
+            action = Intent.ActionIntent.selectSlot(s.items().weaponSlot());
+            reselect[0] = RESELECT_RETRY_TICKS;
+        }
+
         // The w-tap / s-tap release window: after a landed hit the forward key
         // lifts for a few ticks (dropping sprint), then re-presses — the packet
         // rhythm that re-arms sprint-extra knockback. Face the target throughout.
@@ -88,7 +111,7 @@ public final class EngageGoal implements Goal {
             if (mem.wtapReleaseLeft == 0) {
                 mem.wtapRepressed = true;
             }
-            return new Intent(Vec3d.ZERO, facing, Intent.ActionIntent.none(), false, Intent.JumpHint.NONE);
+            return new Intent(Vec3d.ZERO, facing, action, false, Intent.JumpHint.NONE);
         }
 
         Vec3d toTarget = new Vec3d(t.x() - self.x(), 0.0, t.z() - self.z()).horizontalNormalized();
@@ -112,7 +135,7 @@ public final class EngageGoal implements Goal {
             moveDir = toTarget.add(tangent(toTarget, weave.sign()).scale(0.6)).horizontalNormalized();
         }
 
-        return new Intent(moveDir, facing, Intent.ActionIntent.none(), sprint, Intent.JumpHint.NONE);
+        return new Intent(moveDir, facing, action, sprint, Intent.JumpHint.NONE);
     }
 
     /** Rush the target; hold or ease back only when a real stop-ring is set. */

@@ -112,6 +112,16 @@ public final class Brain {
         aim.snapTo(yaw, pitch);
     }
 
+    /**
+     * Respawn: the ServerPlayer entity was replaced — reset every mid-episode
+     * transient (routine FSMs, committed routes, combo state) so the new life
+     * starts from the arbiter's baseline instead of resuming a dead boxer's
+     * half-finished routine with its tool slot still selected.
+     */
+    public void onRespawn() {
+        memory.onRespawn();
+    }
+
     public float aimYaw() {
         return aim.yaw();
     }
@@ -194,7 +204,11 @@ public final class Brain {
         // a descending-window click. The hold rides the attack-firing parameter,
         // never the enabled flag: disabling zeroes the phase state and would
         // swallow the release paired with a tap raised the tick before activation.
-        if (!decision.goal().suppressesAttack() && p.hasTarget()) {
+        // (And only with the weapon actually in hand: a stale held slot — e.g. a
+        // pot after an interrupted heal — would turn the tap's use-item into a
+        // THROW; EngageGoal re-selects the weapon, this closes the in-flight gap.)
+        if (!decision.goal().suppressesAttack() && p.hasTarget()
+                && p.inv().selectedSlot() == s.items().weaponSlot()) {
             boolean attackFiring = actions.stream().anyMatch(a -> a instanceof ActionIntent.Attack);
             boolean inMelee = p.target().distance() <= s.reach() + 0.5;
             boolean critHold = CritSpam.activeThisTick(memory, p.combat().serverTick());
