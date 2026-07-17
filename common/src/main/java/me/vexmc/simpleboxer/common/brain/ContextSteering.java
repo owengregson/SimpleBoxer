@@ -53,8 +53,11 @@ public final class ContextSteering {
 
     /** Base cost of stepping toward a ledge; scaled by travel speed below. */
     private static final double LEDGE_PENALTY = 5.0;
-    /** How far down we still consider "ground" before a drop counts as a ledge. */
-    private static final double LEDGE_MAX_DROP = 3.0;
+    /** How far down we still consider "ground" before a drop counts as a ledge.
+     *  Package-visible: {@link LedgeKeyGuard} re-probes the QUANTIZED key
+     *  direction against the same drop budget, so the two layers agree on what
+     *  a ledge is. */
+    static final double LEDGE_MAX_DROP = 3.0;
     /** A ledge is dangerous even at a crawl, but much worse at a sprint. */
     private static final double LEDGE_MIN_FACTOR = 0.3;
     /** Roughly a full sprint step (blocks/tick): normalizes the speed scaling to [0,1]. */

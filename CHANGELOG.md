@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.7.1 — unreleased
+
+### Navigation
+- **The ledge guard now covers the keys, not just the heading.** Closing the
+  deferral shipped with 0.7.0: steering probes the heading it chooses, but the
+  motor can only press whole keys, and the quantizer's 0.35 deadband promoted a
+  small steering-approved ledge-ward component into a full diagonal press —
+  nearly double the probed drift, enough to walk a ledge-averse goal (healing,
+  eating) over a lip under sprint momentum. The realized key direction is now
+  re-probed against the same drop budget steering uses, and a key pulling over
+  the lip is released — never fabricated — keeping the safe axis when one
+  exists and holding position when none does.
+
 ## 0.7.0 — wall glue solved, potions, navigation & crit-spam
 
 Boxers now collide, confirm teleports, and re-baseline byte-for-byte like a
