@@ -1,13 +1,10 @@
 package me.vexmc.simpleboxer.common.brain;
 
-import java.util.ArrayList;
-import java.util.List;
-import me.vexmc.simpleboxer.common.brain.Intent.ActionIntent;
 import me.vexmc.simpleboxer.common.physics.Vec3d;
 import org.junit.jupiter.api.Test;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class BlockhitControllerTest {
 
@@ -24,51 +21,35 @@ class BlockhitControllerTest {
     }
 
     @Test
-    void tapsABlockThenReleasesInAttackGaps() {
+    void asksForATapEverySixthEligibleTick() {
         BrainMemory mem = new BrainMemory(1L);
         Perception p = melee(true);
-        boolean sawStart = false;
-        boolean sawRelease = false;
-        for (int i = 0; i < 20; i++) {
-            List<ActionIntent> out = new ArrayList<>();
-            blockhit.apply(p, true, true, false, mem, out);
-            for (ActionIntent a : out) {
-                if (a instanceof ActionIntent.StartUse) {
-                    sawStart = true;
-                }
-                if (a instanceof ActionIntent.ReleaseUse) {
-                    sawRelease = true;
-                }
-            }
+        // The counter advances every eligible call; the ask fires at every
+        // multiple of the 6-tick period: calls 6, 12, 18.
+        for (int call = 1; call <= 18; call++) {
+            assertEquals(call % 6 == 0, blockhit.desire(p, true, true, false, mem),
+                    "call " + call);
         }
-        assertTrue(sawStart, "blockhit taps a sword block in the gaps");
-        assertTrue(sawRelease, "and releases it again");
     }
 
     @Test
-    void doesNothingWhileAttackingEveryTick() {
+    void neverAsksWhileAttacksFireEveryTick() {
         BrainMemory mem = new BrainMemory(1L);
         Perception p = melee(true);
-        for (int i = 0; i < 20; i++) {
-            List<ActionIntent> out = new ArrayList<>();
-            // an attack fires every tick (high CPS) -> never room to block
-            boolean emitted = blockhit.apply(p, true, true, true, mem, out);
-            assertFalse(emitted && out.stream().anyMatch(a -> a instanceof ActionIntent.StartUse),
-                    "no block is raised on a ticking-attack frame");
+        for (int call = 1; call <= 20; call++) {
+            assertFalse(blockhit.desire(p, true, true, true, mem),
+                    "no tap on a ticking-attack frame, call " + call);
         }
     }
 
     @Test
     void inertWithoutASwordOrWhenDisabled() {
         BrainMemory mem = new BrainMemory(1L);
-        for (int i = 0; i < 12; i++) {
-            List<ActionIntent> out = new ArrayList<>();
-            assertFalse(blockhit.apply(melee(false), true, true, false, mem, out), "no sword -> no block");
-            assertTrue(out.isEmpty());
+        for (int call = 1; call <= 12; call++) {
+            assertFalse(blockhit.desire(melee(false), true, true, false, mem), "no sword");
         }
-        for (int i = 0; i < 12; i++) {
-            List<ActionIntent> out = new ArrayList<>();
-            assertFalse(blockhit.apply(melee(true), false, true, false, mem, out), "disabled -> no block");
+        for (int call = 1; call <= 12; call++) {
+            assertFalse(blockhit.desire(melee(true), false, true, false, mem), "disabled");
         }
     }
 }

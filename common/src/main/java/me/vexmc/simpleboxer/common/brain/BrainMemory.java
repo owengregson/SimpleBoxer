@@ -82,6 +82,11 @@ public final class BrainMemory {
     public double routeStepFace = Double.NaN;
     public double routeStepRise;
 
+    /* The active-hand machine's slot ledger + hold lifecycle. Written only by
+     * HandControl; goals may read the query methods (using/holdingEat) through
+     * the memory they already hold in decide(). */
+    public final HandControl.HandState hand = new HandControl.HandState();
+
     /* Combat-exclusion stamp: the motorTick of the last hit this boxer LANDED.
      * Initialized (and respawn-reset) to HALF of Long.MIN_VALUE, never the raw
      * minimum: the hold predicate subtracts it from motorTick, and
@@ -234,6 +239,7 @@ public final class BrainMemory {
         waypointTicks = 0;
         routeStepFace = Double.NaN;
         routeStepRise = 0.0;
+        hand.reset();
         lastHitTick = Long.MIN_VALUE / 2;
         targetGroundGap = 0.0;
         elevationGapTicks = 0;

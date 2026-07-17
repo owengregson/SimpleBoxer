@@ -336,7 +336,8 @@ public final class PotHealGoal implements Goal {
                 st[WAIT_TIMER] = WAIT_TICKS;
                 st[PHASE] = 3;
                 return new Intent(healJuke(awayDir, t.distance(), mem), throwAim,
-                        Intent.ActionIntent.startUse(true), true, Intent.JumpHint.NONE);
+                        Intent.ActionIntent.throwUse(s.items().potSlot()), true,
+                        Intent.JumpHint.NONE);
 
             case 3: // weave through the splash while the launch confirms; when the
                     // window settles: count ONLY a confirmed throw, then recover,

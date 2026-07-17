@@ -140,6 +140,9 @@ class SeekFoodGoalTest {
                 assertInstanceOf(Intent.ActionIntent.StartUse.class, i3.action());
         assertTrue(start.mainHand());
         assertSame(Vec3d.ZERO, i3.moveDirWorld(), "stands still to eat");
+        // The hand machine accepted the eat: PHASE_HOLD checks the live hold.
+        mem.hand.holding = true;
+        mem.hand.holdKind = Intent.ActionIntent.UseKind.EAT;
 
         // Phase 3: hold and eat for the full duration, standing still, not swinging.
         for (int tick = 0; tick < 33; tick++) {
@@ -164,6 +167,30 @@ class SeekFoodGoalTest {
         Intent afterReset = g.decide(perc(0.4, true, true, 2.0), mem);
         assertInstanceOf(Intent.ActionIntent.None.class, afterReset.action());
         assertTrue(afterReset.wantSprint());
+    }
+
+    @Test
+    void preemptedHoldRestartsTheMealAtTheSwap() {
+        SeekFoodGoal g = new SeekFoodGoal(supplier(NATURAL));
+        BrainMemory mem = new BrainMemory(1L);
+        Perception p = perc(0.4, true, true, 5.0);
+
+        // Drive to PHASE_HOLD as in the happy path, arrange the hold live, run
+        // one hold tick, then simulate the machine's preemption release:
+        g.decide(p, mem); // phase 0: far enough — arms the food swap
+        g.decide(p, mem); // phase 1: selects the food slot
+        g.decide(p, mem); // phase 2: begins the eat
+        mem.hand.holding = true;
+        mem.hand.holdKind = Intent.ActionIntent.UseKind.EAT;
+        g.decide(p, mem); // one hold tick with the bite live
+        mem.hand.holding = false;
+        mem.hand.holdKind = null;
+        // The next decide() must fall back to PHASE_SWAP_FOOD (a None tick),
+        // and the tick after that re-selects the food slot:
+        assertInstanceOf(Intent.ActionIntent.None.class, g.decide(p, mem).action());
+        Intent.ActionIntent.SelectSlot again =
+                assertInstanceOf(Intent.ActionIntent.SelectSlot.class, g.decide(p, mem).action());
+        assertEquals(3, again.slot());
     }
 
     /**

@@ -122,6 +122,7 @@ public final class Brain {
     private final MotorQuantizer motor = new MotorQuantizer();
     private final ClickController clicks = new ClickController();
     private final BlockhitController blockhit = new BlockhitController();
+    private final HandControl hand = new HandControl();
 
     public Brain(@NotNull BoxerSettings settings, long seed, float initialYaw, float initialPitch) {
         this.settings = settings;
@@ -248,34 +249,36 @@ public final class Brain {
                     NavGeometry.playerBox(self.x(), self.y(), self.z()), dropBudget);
         }
 
-        // 3. Actions: the goal/routine's item action, then CPS-clocked clicks.
-        List<ActionIntent> actions = new ArrayList<>(2);
-        if (!(intent.action() instanceof ActionIntent.None)) {
-            actions.add(intent.action());
-        }
-        boolean suppressed = p.self().useItem() == Perception.UseItemState.USING
-                || intent.action() instanceof ActionIntent.StartUse
-                || decision.goal().suppressesAttack();
-        clicks.consider(p, aim.yaw(), s.reach(), s.aimToleranceDegrees(), suppressed,
+        // 3. Actions: the hand machine owns every slot/use/release emission —
+        //    the goal's action is a REQUEST it validates, sequences, and pairs
+        //    (an interrupted hold is released before the interrupting action, a
+        //    use never fires on a slot the ledger is not on), and its gate
+        //    decides click suppression: clicks are free exactly when the ledger
+        //    holds the weapon and nothing but a sword block is raised —
+        //    deterministic at any ping.
+        List<ActionIntent> actions = new ArrayList<>(4);
+        boolean routineOwnsHand = decision.goal().suppressesAttack();
+        HandControl.Gate gate = hand.route(p, memory.hand, decision.goal().id(),
+                intent.action(), routineOwnsHand, s.items().weaponSlot(), actions);
+        clicks.consider(p, aim.yaw(), s.reach(), s.aimToleranceDegrees(), !gate.clicksFree(),
                 s.combat().missChance(), clicker, nowMs, memory, actions);
 
-        // Blockhit layer: only while actually fighting (a routine that suppresses
-        // attacks is holding a rod/pot/food, not a sword to block with). While the
-        // crit-spam hop owns the rhythm no NEW tap is raised — a real crit-spammer
-        // does not sword-block mid-hop, and a tap's next-tick USING state would eat
-        // a descending-window click. The hold rides the attack-firing parameter,
-        // never the enabled flag: disabling zeroes the phase state and would
-        // swallow the release paired with a tap raised the tick before activation.
-        // (And only with the weapon actually in hand: a stale held slot — e.g. a
-        // pot after an interrupted heal — would turn the tap's use-item into a
-        // THROW; EngageGoal re-selects the weapon, this closes the in-flight gap.)
-        if (!decision.goal().suppressesAttack() && p.hasTarget()
-                && p.inv().selectedSlot() == s.items().weaponSlot()) {
+        // Blockhit layer: the machine grants the window (routine idle, ledger on
+        // the weapon, nothing held or owed — a tap can never displace a use or
+        // slip between a swap and its landing); the combat gates stay here.
+        // While the crit-spam hop owns the rhythm no NEW tap is raised — a real
+        // crit-spammer does not sword-block mid-hop, and a tap's raised tick
+        // must not shadow a descending-window click. The machine pays the tap's
+        // release next tick no matter who owns that tick.
+        boolean tapDesired = false;
+        if (gate.tapWindow() && p.hasTarget()) {
             boolean attackFiring = actions.stream().anyMatch(a -> a instanceof ActionIntent.Attack);
             boolean inMelee = p.target().distance() <= s.reach() + 0.5;
             boolean critHold = CritSpam.activeThisTick(memory, p.combat().serverTick());
-            blockhit.apply(p, s.combat().blockHit(), inMelee, attackFiring || critHold, memory, actions);
+            tapDesired = blockhit.desire(p, s.combat().blockHit(), inMelee,
+                    attackFiring || critHold, memory);
         }
+        hand.finish(memory.hand, tapDesired, actions);
 
         return new BrainOutput(move, aim.yaw(), aim.pitch(), actions, move.sprint());
     }

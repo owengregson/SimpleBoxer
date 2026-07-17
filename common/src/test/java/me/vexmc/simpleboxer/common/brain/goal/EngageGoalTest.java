@@ -107,38 +107,6 @@ class EngageGoalTest {
     }
 
     @Test
-    void reselectsTheWeaponSlotWhenHoldingAnotherSlot() {
-        EngageGoal goal = new EngageGoal(() -> BoxerSettings.DEFAULTS, new AdaptiveStrafe());
-        BrainMemory mem = new BrainMemory(42L);
-        int stale = (WEAPON_SLOT + 2) % 9; // e.g. the pot slot of a heal death ended
-
-        Intent.ActionIntent action = goal.decide(holding(stale), mem).action();
-        Intent.ActionIntent.SelectSlot select =
-                assertInstanceOf(Intent.ActionIntent.SelectSlot.class, action);
-        assertEquals(WEAPON_SLOT, select.slot());
-    }
-
-    @Test
-    void throttlesTheReselectWhileTheCommandIsInFlight() {
-        EngageGoal goal = new EngageGoal(() -> BoxerSettings.DEFAULTS, new AdaptiveStrafe());
-        BrainMemory mem = new BrainMemory(42L);
-        int stale = (WEAPON_SLOT + 2) % 9;
-
-        assertInstanceOf(Intent.ActionIntent.SelectSlot.class,
-                goal.decide(holding(stale), mem).action(), "decision 1 fires");
-        // Decisions 2..10 sit inside the retry window: the first command is
-        // still riding the action latency line, so nothing re-fires.
-        for (int decision = 2; decision <= 10; decision++) {
-            assertInstanceOf(Intent.ActionIntent.None.class,
-                    goal.decide(holding(stale), mem).action(),
-                    "decision " + decision + " is throttled");
-        }
-        // Decision 11: the window elapsed and the slot is STILL wrong — retry.
-        assertInstanceOf(Intent.ActionIntent.SelectSlot.class,
-                goal.decide(holding(stale), mem).action(), "decision 11 retries");
-    }
-
-    @Test
     void holdsTheWeaponSlotQuietly() {
         EngageGoal goal = new EngageGoal(() -> BoxerSettings.DEFAULTS, new AdaptiveStrafe());
         BrainMemory mem = new BrainMemory(42L);

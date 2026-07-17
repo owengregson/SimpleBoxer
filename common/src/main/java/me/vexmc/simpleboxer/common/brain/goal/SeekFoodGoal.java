@@ -151,10 +151,22 @@ public final class SeekFoodGoal implements Goal {
                 // Stand to eat and start the use; hold for the eat duration.
                 st[1] = EAT_TICKS;
                 st[0] = PHASE_HOLD;
-                return new Intent(Vec3d.ZERO, faceMove, Intent.ActionIntent.startUse(true), false,
+                return new Intent(Vec3d.ZERO, faceMove,
+                        Intent.ActionIntent.eat(s.items().foodSlot()), false,
                         Intent.JumpHint.NONE);
             }
             case PHASE_HOLD -> {
+                // The machine releases a preempted meal the tick another goal
+                // seizes the hand (a heal reflex outranks eating). If the hold
+                // is no longer live the bite never finished — restart the meal
+                // at the food swap instead of dry-chewing the rest of the timer
+                // with the weapon back in hand.
+                if (!mem.hand.holdingEat()) {
+                    st[0] = PHASE_SWAP_FOOD;
+                    st[1] = 0;
+                    return new Intent(Vec3d.ZERO, faceMove, Intent.ActionIntent.none(), false,
+                            Intent.JumpHint.NONE);
+                }
                 st[1]--;
                 if (st[1] <= 0) {
                     st[0] = PHASE_SWAP_BACK;
