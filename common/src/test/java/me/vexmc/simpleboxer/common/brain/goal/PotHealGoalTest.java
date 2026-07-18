@@ -58,6 +58,21 @@ class PotHealGoalTest {
                 inv, new Perception.CombatState(1.0, false, 0L, launched), 0);
     }
 
+    /**
+     * {@code decide()} plus the hand machine's ledger move: in production,
+     * {@code HandControl.route} sets {@code intendedSlot} the same tick for any
+     * {@code SelectSlot} the routine requests ("the ledger moves only with an
+     * emission"), and the goal's phase-2 ledger check reads it back. Without
+     * mirroring that move here the FSM walk would re-press the pot key forever.
+     */
+    private static Intent decideRouted(PotHealGoal goal, Perception p, BrainMemory mem) {
+        Intent intent = goal.decide(p, mem);
+        if (intent.action() instanceof Intent.ActionIntent.SelectSlot sel) {
+            mem.hand.intendedSlot = sel.slot();
+        }
+        return intent;
+    }
+
     private static Perception noTarget(double healthPct) {
         Perception.SelfState self = new Perception.SelfState(
                 0, 64, 0, Vec3d.ZERO, true, false,
@@ -134,31 +149,32 @@ class PotHealGoalTest {
         PotHealGoal goal = new PotHealGoal(() -> settings(true, false, 6));
         BrainMemory mem = new BrainMemory(1L);
 
-        // Phase 0: too close (< 4.5) — keep fleeing, do not advance.
-        Intent flee = goal.decide(perc(0.1, true, 2.0, 0), mem);
+        // Phase 0, first tick: too close (< 3.5) — keep fleeing, but the wind-up
+        // is already front-loaded: the pot swap ships NOW and the facing is the
+        // throw aim (its yaw IS the flee line), so pitch settles during the
+        // retreat and no later tick is spent swapping or aiming.
+        Intent flee = decideRouted(goal, perc(0.1, true, 2.0, 0), mem);
         assertEquals(new Vec3d(-1, 0, 0), flee.moveDirWorld(),
                 "flee heading points away from the target");
         assertTrue(flee.wantSprint(), "sprint away while creating space");
-        assertInstanceOf(Intent.FacingIntent.FaceMove.class, flee.facing());
+        assertInstanceOf(Intent.FacingIntent.AimAt.class, flee.facing(),
+                "aiming the throw already, on the flee yaw");
+        Intent.ActionIntent.SelectSlot early =
+                assertInstanceOf(Intent.ActionIntent.SelectSlot.class, flee.action());
+        assertEquals(POT_SLOT, early.slot(), "the pot swap front-loads into the retreat");
         assertEquals(0, mem.ints("potHeal", 7)[PHASE], "still too close, stay in phase 0");
 
-        // Phase 0 -> 1 once we have opened up past the retreat distance.
-        goal.decide(perc(0.1, true, 5.0, 0), mem);
-        assertEquals(1, mem.ints("potHeal", 7)[PHASE]);
-
-        // Phase 1: swap to the pot slot, still sprinting, already pitching down.
-        Intent swap = goal.decide(perc(0.1, true, 5.0, 0), mem);
-        assertInstanceOf(Intent.ActionIntent.SelectSlot.class, swap.action());
-        assertEquals(POT_SLOT, ((Intent.ActionIntent.SelectSlot) swap.action()).slot());
-        assertTrue(swap.wantSprint(), "the swap tick keeps sprinting");
-        assertInstanceOf(Intent.FacingIntent.AimAt.class, swap.facing());
+        // Phase 0 -> 2 the tick the throw gate (3.5) opens: no separate swap tick.
+        Intent lastFlee = decideRouted(goal, perc(0.1, true, 5.0, 0), mem);
+        assertInstanceOf(Intent.ActionIntent.None.class, lastFlee.action(),
+                "the swap shipped on tick one; the gate tick carries no action");
         assertEquals(2, mem.ints("potHeal", 7)[PHASE]);
 
         // Phase 2: throw ON THE RUN. The aim point sits 0.3 blocks ahead along
         // the flee heading at FOOT height: awayDir = normalize(self - target) =
         // normalize((0-5, 0, 0-0)) = (-1, 0, 0), so the point is
         // (0 + (-1)*0.3, 64.0, 0 + 0*0.3) = (-0.3, 64.0, 0.0).
-        Intent throw1 = goal.decide(perc(0.1, true, 5.0, 0), mem);
+        Intent throw1 = decideRouted(goal, perc(0.1, true, 5.0, 0), mem);
         assertInstanceOf(Intent.ActionIntent.StartUse.class, throw1.action());
         assertTrue(throw1.wantSprint(), "throws at a sprint, not standing");
         assertTrue(throw1.moveDirWorld().lengthSqr() > 0.99, "juking on a unit heading");
@@ -177,36 +193,36 @@ class PotHealGoalTest {
                 "an unconfirmed use-item charges nothing at throw time");
         assertEquals(3, mem.ints("potHeal", 7)[PHASE]);
 
-        // Phase 3: weave out the wait with the launch CONFIRMED (the server
-        // spawned our ThrownPotion: launched 0 -> 1). The budget is charged at
-        // window expiry, not at the use.
-        for (int i = 0; i < 9; i++) {
-            Intent wait = goal.decide(perc(0.1, true, 5.0, 1), mem);
+        // Phase 3 with the launch CONFIRMED (the server spawned our ThrownPotion:
+        // launched 0 -> 1): the window settles at the rethrow floor (4 weave
+        // ticks), not the full 10-tick failure timeout — the pot-spam cadence.
+        for (int i = 0; i < 3; i++) {
+            Intent wait = decideRouted(goal, perc(0.1, true, 5.0, 1), mem);
             assertTrue(wait.moveDirWorld().lengthSqr() > 0.99, "weaves through the splash");
             assertTrue(wait.wantSprint(), "keeps sprinting through the wait");
             assertInstanceOf(Intent.FacingIntent.AimAt.class, wait.facing());
-            assertEquals(3, mem.ints("potHeal", 7)[PHASE], "still waiting");
-            assertEquals(0, mem.ints("potHeal", 7)[POTS_THROWN], "counts only at expiry");
+            assertEquals(3, mem.ints("potHeal", 7)[PHASE], "still inside the rethrow floor");
+            assertEquals(0, mem.ints("potHeal", 7)[POTS_THROWN], "counts only at settle");
         }
-        goal.decide(perc(0.1, true, 5.0, 1), mem); // 10th wait tick: window settles
+        decideRouted(goal, perc(0.1, true, 5.0, 1), mem); // 4th weave tick: floor reached, settles
         assertEquals(1, mem.ints("potHeal", 7)[POTS_THROWN], "one CONFIRMED throw");
-        assertEquals(1, mem.ints("potHeal", 7)[PHASE], "still low -> throw another");
+        assertEquals(2, mem.ints("potHeal", 7)[PHASE],
+                "still low -> straight back to the throw, the pot is in hand");
 
-        // Second throw (phase 1 -> 2); its baseline is the current count (1).
-        goal.decide(perc(0.1, true, 5.0, 1), mem); // phase 1: swap
-        Intent throw2 = goal.decide(perc(0.1, true, 5.0, 1), mem); // phase 2: throw
+        // Second throw immediately (phase 2); its baseline is the current count (1).
+        Intent throw2 = decideRouted(goal, perc(0.1, true, 5.0, 1), mem);
         assertInstanceOf(Intent.ActionIntent.StartUse.class, throw2.action());
 
-        // The second pot lands (1 -> 2) and health recovers DURING the wait: the
-        // expiry both confirms the throw and routes to phase 4 (swap back).
-        for (int i = 0; i < 10; i++) {
-            goal.decide(perc(0.95, true, 5.0, 2), mem); // 19 HP >= 18 resume
+        // The second pot lands (1 -> 2) and health recovers DURING the weave: the
+        // settle both confirms the throw and routes to phase 4 (swap back).
+        for (int i = 0; i < 4; i++) {
+            decideRouted(goal, perc(0.95, true, 5.0, 2), mem); // 19 HP >= 18 resume
         }
         assertEquals(2, mem.ints("potHeal", 7)[POTS_THROWN], "second throw confirmed");
         assertEquals(4, mem.ints("potHeal", 7)[PHASE], "recovered -> done phase");
 
         // Phase 4: swap back to the weapon, reset counters, drop the latch.
-        Intent back = goal.decide(perc(0.95, true, 5.0, 2), mem);
+        Intent back = decideRouted(goal, perc(0.95, true, 5.0, 2), mem);
         assertInstanceOf(Intent.ActionIntent.SelectSlot.class, back.action());
         assertEquals(WEAPON_SLOT, ((Intent.ActionIntent.SelectSlot) back.action()).slot());
         assertEquals(0, mem.ints("potHeal", 7)[PHASE], "phase reset");
@@ -221,8 +237,10 @@ class PotHealGoalTest {
      * empty hand) never spawns a ThrownPotion, so the budget is NOT charged and
      * the throw is retried — but only THROW_FAIL_CAP (3) times, after which the
      * episode ends through the durable give-up path instead of looping forever.
-     * Tick arithmetic: 1 (phase 0; 5.0 > 4.5 advances at once) + 3 cycles of
-     * [1 swap + 1 throw + 10 waits] + 1 swap-back = 38 decides.
+     * An unconfirmed window never settles early, so each attempt runs the FULL
+     * failure timeout. Tick arithmetic: 1 (phase 0; 5.0 > 3.5 advances at once,
+     * swap shipping on that same tick) + 3 cycles of [1 throw + 10 waits] +
+     * 1 swap-back = 35 decides.
      */
     @Test
     void unconfirmedThrowsRetryBoundedThenGiveUpDurably() {
@@ -235,7 +253,7 @@ class PotHealGoalTest {
         int startUses = 0;
         int weaponSwaps = 0;
         for (int tick = 0; tick < 60 && weaponSwaps == 0; tick++) {
-            Intent intent = goal.decide(low, mem);
+            Intent intent = decideRouted(goal, low, mem);
             if (intent.action() instanceof Intent.ActionIntent.StartUse) {
                 startUses++;
             } else if (intent.action() instanceof Intent.ActionIntent.SelectSlot sel
@@ -250,6 +268,88 @@ class PotHealGoalTest {
                 "no phantom pot ever charged the budget");
         assertEquals(1, mem.ints("potHeal", 7)[GAVE_UP], "durable give-up");
         assertEquals(0.0, goal.utility(low), "utility stays silent while still low");
+    }
+
+    /**
+     * The interrupted-episode regression (the pot-budget integration failure):
+     * recovery is OBSERVED by {@code utility} — which returns 0 with the very
+     * perception {@code decide} would have seen, so decide can never run the
+     * FSM's own cleanup on this path. The latch release must ABORT the episode
+     * to phase 0; parking mid-phase-3 instead left a stale confirm window that
+     * the next round resumed: it phantom-settled against the PREVIOUS round's
+     * launch and rethrew with the weapon in hand (re-armed by the engage-gap
+     * baseline) — a use the hand machine silently drops, thrice, then a
+     * durable give-up with health still on the floor.
+     */
+    @Test
+    void recoveryReleaseAbortsTheEpisodeInsteadOfParkingIt() {
+        PotHealGoal goal = new PotHealGoal(() -> settings(true, false, 6));
+        BrainMemory mem = new BrainMemory(7L);
+
+        // Round 1: arbitration arms the latch (utility always scores before
+        // decide), then: open (swap front-loads), throw pot 1, launch confirmed
+        // (0 -> 1) while still inside the rethrow floor.
+        assertTrue(goal.utility(perc(0.1, true, 5.0, 0)) > 0.5, "the latch arms");
+        decideRouted(goal, perc(0.1, true, 5.0, 0), mem); // phase 0 -> 2, swap shipped
+        decideRouted(goal, perc(0.1, true, 5.0, 0), mem); // phase 2: throw, base = 0
+        decideRouted(goal, perc(0.1, true, 5.0, 1), mem); // phase 3, elapsed 1: confirmed
+        assertEquals(3, mem.ints("potHeal", 7)[PHASE], "mid-window, inside the floor");
+
+        // The splash lands, health crosses resume: the release aborts the episode.
+        assertEquals(0.0, goal.utility(perc(0.95, true, 5.0, 1)));
+        assertEquals(0, mem.ints("potHeal", 7)[PHASE],
+                "the latch release aborts the parked episode to phase 0");
+
+        // The engage gap re-arms the weapon (HandControl's baseline would).
+        mem.hand.intendedSlot = WEAPON_SLOT;
+
+        // Round 2: health re-drops. A FRESH episode must start — the retreat
+        // front-loads the pot swap again, re-establishing the hand invariant.
+        assertTrue(goal.utility(perc(0.1, true, 5.0, 1)) > 0.5, "re-arms cleanly");
+        Intent restart = decideRouted(goal, perc(0.1, true, 5.0, 1), mem);
+        Intent.ActionIntent.SelectSlot fresh =
+                assertInstanceOf(Intent.ActionIntent.SelectSlot.class, restart.action());
+        assertEquals(POT_SLOT, fresh.slot(), "a fresh episode re-presses the pot key");
+
+        // The throw goes out ON the pot slot, and only a genuinely NEW launch
+        // (1 -> 2) confirms — round 1's launch is never phantom-charged.
+        Intent rethrow = decideRouted(goal, perc(0.1, true, 5.0, 1), mem);
+        assertInstanceOf(Intent.ActionIntent.StartUse.class, rethrow.action());
+        for (int i = 0; i < 4; i++) {
+            decideRouted(goal, perc(0.1, true, 5.0, 2), mem);
+        }
+        assertEquals(1, mem.ints("potHeal", 7)[POTS_THROWN],
+                "exactly the new launch confirms; no phantom from round 1");
+        assertEquals(0, mem.ints("potHeal", 7)[GAVE_UP], "no spurious give-up");
+    }
+
+    /**
+     * A mid-episode hand seizure WITHOUT an unlatch (a higher-utility exclusive
+     * goal steals ticks and its request moves the ledger): the rethrow loop's
+     * "pot still in hand" assumption is broken, and the hand machine silently
+     * drops a StartUse whose slot disagrees with its ledger. Phase 2 must
+     * re-press the pot key — one tick — instead of burning the fail streak
+     * throwing blind.
+     */
+    @Test
+    void midEpisodeHandSeizureReswapsBeforeThrowing() {
+        PotHealGoal goal = new PotHealGoal(() -> settings(true, false, 6));
+        BrainMemory mem = new BrainMemory(8L);
+
+        decideRouted(goal, perc(0.1, true, 5.0, 0), mem); // phase 0 -> 2, swap shipped
+        mem.hand.intendedSlot = WEAPON_SLOT; // the seizing goal moved the hand
+
+        Intent reswap = goal.decide(perc(0.1, true, 5.0, 0), mem);
+        Intent.ActionIntent.SelectSlot sel =
+                assertInstanceOf(Intent.ActionIntent.SelectSlot.class, reswap.action(),
+                        "re-presses the pot key instead of throwing blind");
+        assertEquals(POT_SLOT, sel.slot());
+        assertEquals(2, mem.ints("potHeal", 7)[PHASE], "still the throw phase");
+
+        mem.hand.intendedSlot = POT_SLOT; // the route moves the ledger that same tick
+        Intent thrown = goal.decide(perc(0.1, true, 5.0, 0), mem);
+        assertInstanceOf(Intent.ActionIntent.StartUse.class, thrown.action(),
+                "the next phase-2 tick throws for real");
     }
 
     /**
@@ -268,7 +368,7 @@ class PotHealGoalTest {
         int weaponSwaps = 0;
         for (int tick = 0; tick < 200 && weaponSwaps == 0; tick++) {
             Perception p = perc(0.1, true, 5.0, launched);
-            Intent intent = goal.decide(p, mem);
+            Intent intent = decideRouted(goal, p, mem);
             assertTrue(mem.ints("potHeal", 7)[POTS_THROWN] <= cap,
                     "potsThrown never exceeds the splash cap");
             if (intent.action() instanceof Intent.ActionIntent.StartUse) {
@@ -303,7 +403,7 @@ class PotHealGoalTest {
 
         boolean threw = false;
         for (int tick = 0; tick < PotHealGoal.RETREAT_TICK_CAP + 15 && !threw; tick++) {
-            Intent intent = goal.decide(pinned, mem);
+            Intent intent = decideRouted(goal, pinned, mem);
             if (intent.action() instanceof Intent.ActionIntent.StartUse) {
                 threw = true;
             }
@@ -330,7 +430,7 @@ class PotHealGoalTest {
         List<Double> jukeZ = new ArrayList<>();
         for (int tick = 0; tick < 200; tick++) {
             int phaseBefore = mem.ints("potHeal", 7)[PHASE];
-            Intent intent = goal.decide(perc(0.1, true, 5.0, launched), mem);
+            Intent intent = decideRouted(goal, perc(0.1, true, 5.0, launched), mem);
             if (intent.action() instanceof Intent.ActionIntent.StartUse) {
                 launched++; // confirm every throw so the cycle keeps looping
             }
@@ -391,10 +491,10 @@ class PotHealGoalTest {
             BrainMemory mem = new BrainMemory(6L);
             int launched = 0;
             int jukeTicks = 0;
-            // 60 ticks clears the phase-0 retreat cap (40) even pinned close.
+            // 60 ticks clears the phase-0 retreat cap (16) even pinned close.
             for (int tick = 0; tick < 60; tick++) {
                 int phaseBefore = mem.ints("potHeal", 7)[PHASE];
-                Intent intent = goal.decide(perc(0.1, true, band.distance(), launched), mem);
+                Intent intent = decideRouted(goal, perc(0.1, true, band.distance(), launched), mem);
                 if (intent.action() instanceof Intent.ActionIntent.StartUse) {
                     launched++;
                 }

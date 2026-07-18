@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.8.1 — pots on the draw
+
+### Combat
+- **The first pot flies sooner.** The pot swap and the ~79.5° throw aim now
+  happen DURING the retreat (the throw yaw is the flee line, so the sprint
+  is unaffected while pitch settles), the throw gate drops from 4.5 to 3.5
+  blocks — inside the kite ring, whose drift finishes opening the gap — and
+  the pressure cap falls from 40 to 16 ticks: the tick the gap opens, the
+  pot is already in hand and on angle.
+- **Pot-spam cadence.** Repeat throws skip the swap tick (the pot stays in
+  hand mid-episode) and the confirmation window settles at a 4-tick rethrow
+  floor once the server confirms the launch — 5 ticks per pot against the
+  old fixed 12, with the full 10-tick window kept only as the failure
+  timeout so laggy confirmations never miscount. Era-safe by arithmetic:
+  Spigot's use-item spam limiter (decompiled identical from 1.17.1 through
+  26.x) only mutes sustained sub-37.5 ms streams — no whole-tick cadence
+  can trip it.
+- **Interrupted heals abort cleanly.** Recovery releases the latch through a
+  path `decide` never sees, which used to park the episode mid-window; a
+  later re-trigger resumed the stale window, phantom-settled against the old
+  launch baseline, and threw with the weapon ledgered — silently dropped by
+  the hand machine's wrong-slot guard. A latch release now aborts the
+  episode outright, and the throw phase re-presses the pot key whenever the
+  hand was seized mid-episode.
+
 ## 0.8.0 — flow: one hand, one budget, zero stalls
 
 Boxers now fight and move like one continuous mind: pathfinding can never
