@@ -26,31 +26,31 @@ final class LedgeKeyGuard {
     private LedgeKeyGuard() {}
 
     /**
-     * Mask ledge-ward keys out of {@code input} for a ledge-averse goal: the
-     * input comes back unchanged when its realized direction keeps ground
-     * within {@link ContextSteering#LEDGE_MAX_DROP}; otherwise the pressed
-     * single-key alternative truest to {@code heading} that stays grounded, or
-     * all movement keys released when neither is safe (jump/sprint/sneak pass
-     * through untouched either way).
+     * Mask ledge-ward keys out of {@code input} against the goal's drop budget:
+     * the input comes back unchanged when its realized direction keeps ground
+     * within {@code maxDrop} blocks below (a within-budget drop is a deliberate
+     * descent, not a ledge); otherwise the pressed single-key alternative truest
+     * to {@code heading} that stays grounded, or all movement keys released when
+     * neither is safe (jump/sprint/sneak pass through untouched either way).
      */
     static @NotNull MoveInput mask(@NotNull MoveInput input, @NotNull MoveHeading heading,
-            float aimYawDeg, @NotNull CollisionView world, @NotNull Box box) {
+            float aimYawDeg, @NotNull CollisionView world, @NotNull Box box, double maxDrop) {
         double forward = input.forward();
         double strafe = input.strafe();
         if (forward == 0.0 && strafe == 0.0) {
             return input;
         }
-        if (!ledgeward(world, box, forward, strafe, aimYawDeg)) {
+        if (!ledgeward(world, box, forward, strafe, aimYawDeg, maxDrop)) {
             return input;
         }
         Vec3d want = heading.dirWorld();
         MoveInput best = null;
         double bestDot = Double.NEGATIVE_INFINITY;
-        if (forward != 0.0 && !ledgeward(world, box, forward, 0.0, aimYawDeg)) {
+        if (forward != 0.0 && !ledgeward(world, box, forward, 0.0, aimYawDeg, maxDrop)) {
             best = new MoveInput(forward, 0.0, input.jump(), input.sprint(), input.sneak());
             bestDot = realized(forward, 0.0, aimYawDeg).horizontalNormalized().dot(want);
         }
-        if (strafe != 0.0 && !ledgeward(world, box, 0.0, strafe, aimYawDeg)
+        if (strafe != 0.0 && !ledgeward(world, box, 0.0, strafe, aimYawDeg, maxDrop)
                 && realized(0.0, strafe, aimYawDeg).horizontalNormalized().dot(want) > bestDot) {
             best = new MoveInput(0.0, strafe, input.jump(), input.sprint(), input.sneak());
         }
@@ -58,11 +58,11 @@ final class LedgeKeyGuard {
                 : new MoveInput(0.0, 0.0, input.jump(), input.sprint(), input.sneak());
     }
 
-    /** Whether these keys' realized world direction steps off into a deep drop. */
+    /** Whether these keys' realized world direction steps off a beyond-budget drop. */
     private static boolean ledgeward(CollisionView world, Box box,
-            double forward, double strafe, float aimYawDeg) {
+            double forward, double strafe, float aimYawDeg, double maxDrop) {
         return NavGeometry.ledgeAhead(world, box, realized(forward, strafe, aimYawDeg),
-                NavGeometry.LOOK_AHEAD, ContextSteering.LEDGE_MAX_DROP);
+                NavGeometry.LOOK_AHEAD, maxDrop);
     }
 
     /** {@code ClientPhysics.accelerate}'s rotation: the world direction these keys drive. */

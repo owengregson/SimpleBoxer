@@ -33,6 +33,16 @@ public record Perception(
      * motor stack can predict takeoff kinematics instead of guessing from
      * velocity alone. A real client knows both via
      * ClientboundUpdateAttributes / UpdateMobEffect.
+     *
+     * <p>The fall block rides the same aged line: {@code maxHealth} is the
+     * max-health attribute (modifiers included), {@code fallEpf} the
+     * Protection/Feather-Falling EPF summed off the LIVE worn armor,
+     * {@code safeFallDistance} the blocks a fall stays free (attribute from
+     * 1.20.5, {@code 3 + jumpBoostLevel} before — identical observable),
+     * {@code fallDamageMultiplier} the 1.20.5+ attribute (1.0 before), and
+     * {@code slowFalling} whether the effect is live. Together they price a
+     * deliberate ledge drop via {@link FallDamage} — knowledge a real client
+     * has from its own equipment/attribute/effect packets.</p>
      */
     public record SelfState(
             double x, double y, double z,
@@ -44,7 +54,12 @@ public record Perception(
             @NotNull UseItemState useItem,
             boolean blocking,
             double movementSpeed,
-            int jumpBoostAmplifier) {
+            int jumpBoostAmplifier,
+            double maxHealth,
+            int fallEpf,
+            double safeFallDistance,
+            double fallDamageMultiplier,
+            boolean slowFalling) {
 
         public @NotNull Vec3d position() {
             return new Vec3d(x, y, z);

@@ -50,7 +50,7 @@ class ProactiveJumpTest {
     private static Perception grounded(double x, double y, double z, Vec3d velocity,
             boolean horizontalCollision, double movementSpeed) {
         SelfState self = new SelfState(x, y, z, velocity, true, horizontalCollision,
-                1.0, 1.0, UseItemState.NONE, false, movementSpeed, -1);
+                1.0, 1.0, UseItemState.NONE, false, movementSpeed, -1, 20.0, 0, 3.0, 1.0, false);
         return new Perception(self, null, TerrainView.OPEN, InventoryView.EMPTY,
                 CombatState.IDLE, 0);
     }
@@ -199,7 +199,7 @@ class ProactiveJumpTest {
     @Test
     void doesNotHopWhileAirborne() {
         SelfState airborne = new SelfState(1.8, 64.5, 0.0, new Vec3d(0.25, 0.0, 0.0),
-                false, false, 1.0, 1.0, UseItemState.NONE, false, 0.1, -1);
+                false, false, 1.0, 1.0, UseItemState.NONE, false, 0.1, -1, 20.0, 0, 3.0, 1.0, false);
         Perception p = new Perception(airborne, null, TerrainView.OPEN,
                 InventoryView.EMPTY, CombatState.IDLE, 0);
         assertEquals(JumpHint.NONE, jump.evaluate(p, eastward(), true, stepWorld(), mem()));
@@ -256,7 +256,7 @@ class ProactiveJumpTest {
         for (int tick = 0; tick < 80; tick++) {
             SelfState self = new SelfState(phys.x(), phys.y(), phys.z(), phys.velocity(),
                     phys.onGround(), phys.horizontalCollision(),
-                    1.0, 1.0, UseItemState.NONE, false, walkSpeed, -1);
+                    1.0, 1.0, UseItemState.NONE, false, walkSpeed, -1, 20.0, 0, 3.0, 1.0, false);
             Perception p = new Perception(self, null, TerrainView.OPEN, InventoryView.EMPTY,
                     CombatState.IDLE, 0);
             JumpHint hint = jump.evaluate(p, south, true, world, mem);

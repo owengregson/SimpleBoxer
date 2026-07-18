@@ -329,10 +329,10 @@ class BaritoneStylePlannerTest {
     }
 
     /**
-     * Clearance berth: beside a 7-cell wall the hug lane (ring-1 surcharge 1.0691
-     * per cell × 9) loses to one lane out (ring-2 surcharge 0.3564 × 10 + two extra
-     * diagonals 2.9524) — 45.6165 vs 42.1541 ticks, arithmetic in the class javadoc
-     * — so no waypoint may sit in the wall-adjacent lane.
+     * Clearance berth (ring-1 model): beside the 7-cell wall the hug lane pays
+     * 9 × 1.0691 = 9.622 in surcharges, while one lane out pays none — only two
+     * extra diagonals (+2.9524) and one re-entry cell beside the wall's end
+     * (+1.0691), 4.0216 total — so the route bows out of the wall-adjacent lane.
      */
     @Test
     void openGroundRouteKeepsATwoCellBerthOffAWall() {
@@ -366,5 +366,267 @@ class BaritoneStylePlannerTest {
         for (Vec3d w : route.get().waypoints()) {
             assertEquals(0.5, w.z(), 1.0E-9, "the only line through is the corridor itself");
         }
+    }
+
+    // --- WS-NAV: deep deliberate drops, damage pricing, slicing ----------------
+
+    /** The shared drop lane: floor 64, 3×3 pillar over (−1..1)², top 69; start on
+     *  the pillar, goal 6 east on the floor. Optimal (hand-derived, exact):
+     *  enter (1,0) [T + r1: the x=2 column is a drop → ring-1 obstruction],
+     *  FALL 5 to (2,0) [ceil(5−3)=2 points → +20; r1: the pillar blocks ring
+     *  cells], then (3..6,0) [4 T, rings all standable] —
+     *  4.632930 + 37.886271 + 14.255168 = 56.774369 ticks. */
+    private static FakeWorld deepDropArena() {
+        return FakeWorld.floorAt(64).wall(-1, 64, -1, 1, 68, 1);
+    }
+
+    private static double ring1() {
+        return 0.6 * BaritoneStylePlanner.CLEARANCE_COST;
+    }
+
+    private static double dropLaneCost(double fallBlocks, double damagePoints) {
+        return (MoveCosts.SPRINT_ONE_BLOCK + ring1())
+                + (MoveCosts.WALK_OFF_BLOCK + MoveCosts.fallTicks(fallBlocks)
+                        + MoveCosts.CENTER_AFTER_FALL
+                        + BaritoneStylePlanner.DAMAGE_PENALTY_TICKS * damagePoints + ring1())
+                + 4.0 * MoveCosts.SPRINT_ONE_BLOCK;
+    }
+
+    @Test
+    void fallsOffADeepLedgeWithinBudget() {
+        var route = planner.plan(new Vec3d(0.5, 69, 0.5), new Vec3d(6.5, 64, 0.5),
+                deepDropArena(), 4000, true,
+                BaritoneStylePlanner.MAX_EXTENT,
+                new BaritoneStylePlanner.FallBudget(13.0, 3.0, 1.0));
+
+        assertTrue(route.isPresent(), "the 5-block drop must be a first-class edge");
+        assertTrue(route.get().complete());
+        assertEquals(69.0, route.get().origin().y(), 1.0E-9, "the plan starts on the pillar");
+        List<Vec3d> path = route.get().waypoints();
+        assertEquals(64.0, path.get(0).y(), 1.0E-9,
+                "waypoint 0 is the landing — origin→wp0 IS the 5-drop segment");
+        for (Vec3d w : path) {
+            assertEquals(64.0, w.y(), 1.0E-9, "a clean FALL leaves no intermediate ledge: " + w);
+        }
+        Vec3d last = path.get(path.size() - 1);
+        assertEquals(6.5, last.x(), 1.0E-9);
+        assertEquals(64.0, last.y(), 1.0E-9);
+        // ≈ 56.7744 — the calibration table's "drop" row, exact.
+        assertEquals(dropLaneCost(5.0, 2.0), route.get().cost(), 1.0E-9);
+    }
+
+    /** With the DEFAULT (zero-damage) budget the same arena must stay UNREACHABLE:
+     *  the 5-drop exceeds maxFall 3, the pillar is 3 cells wide (partials advance
+     *  &lt; 2 cells), so the legacy 6-arg plan() returns empty — pinning that the
+     *  deep edge exists ONLY under an explicit budget. */
+    @Test
+    void defaultBudgetStillRefusesTheDeepDrop() {
+        assertTrue(planner.plan(new Vec3d(0.5, 69, 0.5), new Vec3d(6.5, 64, 0.5),
+                deepDropArena(), 4000, true, BaritoneStylePlanner.MAX_EXTENT).isEmpty());
+    }
+
+    /** Adjacent stairs beat the damaging drop. Stairs one lane off (z=1) descend
+     *  69→68→67→66→65→64. Optimal stair route (hand-derived, exact): DIAG into
+     *  (1,1) + 5 DESCENDs [(2,1)..(6,1)] + T into (6,0), every entered cell
+     *  ring-1-obstructed (platform/stair neighbours) — 6.109164 + 5 × 5.559499 +
+     *  4.632930 = 38.539589 vs the drop lane's 56.774 + 4 extra r1 (stair-adjacent
+     *  floor cells) = 61.051: the walk wins — the calibration table's "stairs
+     *  comparably close" row. */
+    @Test
+    void prefersNearbyStairsOverADamagingDrop() {
+        FakeWorld world = deepDropArena()
+                .wall(2, 64, 1, 2, 67, 1)   // stair top 68
+                .wall(3, 64, 1, 3, 66, 1)   // stair top 67
+                .wall(4, 64, 1, 4, 65, 1)   // stair top 66
+                .block(5, 64, 1);           // stair top 65
+        var route = planner.plan(new Vec3d(0.5, 69, 0.5), new Vec3d(6.5, 64, 0.5),
+                world, 4000, true, BaritoneStylePlanner.MAX_EXTENT,
+                new BaritoneStylePlanner.FallBudget(13.0, 3.0, 1.0));
+
+        assertTrue(route.isPresent());
+        assertTrue(route.get().complete());
+        List<Vec3d> path = route.get().waypoints();
+        assertTrue(path.stream().anyMatch(w -> w.y() == 66.0), "it takes the staircase");
+        double prevY = route.get().origin().y();
+        for (Vec3d w : path) {
+            assertTrue(prevY - w.y() <= 1.0 + 1.0E-9,
+                    "no segment may drop deeper than a DESCEND: " + w);
+            prevY = w.y();
+        }
+        double descend = MoveCosts.SPRINT_ONE_BLOCK + MoveCosts.CENTER_AFTER_FALL;
+        double expected = (MoveCosts.SPRINT_ONE_BLOCK_DIAGONAL + ring1())
+                + 5.0 * (descend + ring1())
+                + (MoveCosts.SPRINT_ONE_BLOCK + ring1());
+        assertEquals(expected, route.get().cost(), 1.0E-9); // ≈ 38.5396
+    }
+
+    /** Stairs far BEHIND lose to the drop: the same staircase moved to the west
+     *  side (descending away from the goal) makes the walking route ≈ 90+ ticks
+     *  (5 descends + ~12 return cells around the pillar) while the east drop
+     *  lane still costs 56.774 — the calibration table's "stairs far behind"
+     *  row. The route must be the SAME drop lane as fallsOffADeepLedgeWithinBudget. */
+    @Test
+    void prefersTheDropOverStairsFarBehind() {
+        FakeWorld world = deepDropArena()
+                .wall(-2, 64, 0, -2, 67, 0)   // stair top 68 (behind)
+                .wall(-3, 64, 0, -3, 66, 0)   // 67
+                .wall(-4, 64, 0, -4, 65, 0)   // 66
+                .block(-5, 64, 0);            // 65
+        var route = planner.plan(new Vec3d(0.5, 69, 0.5), new Vec3d(6.5, 64, 0.5),
+                world, 4000, true, BaritoneStylePlanner.MAX_EXTENT,
+                new BaritoneStylePlanner.FallBudget(13.0, 3.0, 1.0));
+
+        assertTrue(route.isPresent());
+        assertTrue(route.get().complete());
+        assertEquals(64.0, route.get().waypoints().get(0).y(), 1.0E-9,
+                "waypoint 0 is the drop landing, not a stair");
+        assertEquals(dropLaneCost(5.0, 2.0), route.get().cost(), 1.0E-9);
+    }
+
+    /** THE damage-pricing pin: an off-line staircase whose walking cost
+     *  (hand-derived 53.863895: 5 T + 5 D + 1 DIAG + 8 r1) sits BETWEEN the
+     *  drop lane undamaged (36.774369) and damaged (56.774369). With the real
+     *  damage factor the stairs win; zero the factor (Slow Falling) and the
+     *  drop wins — 10 ticks/point × 2 points is exactly the 20-tick swing that
+     *  flips the choice. */
+    @Test
+    void damagePenaltyTipsTheChoiceTowardStairs() {
+        FakeWorld world = armStairArena();
+        var route = planner.plan(new Vec3d(0.5, 69, 0.5), new Vec3d(6.5, 64, 0.5),
+                world, 4000, true, BaritoneStylePlanner.MAX_EXTENT,
+                new BaritoneStylePlanner.FallBudget(13.0, 3.0, 1.0));
+        assertTrue(route.isPresent());
+        assertTrue(route.get().waypoints().stream().anyMatch(w -> w.y() == 66.0),
+                "with damage priced in, the moderately-close stairs win");
+        double prevY = route.get().origin().y();
+        for (Vec3d w : route.get().waypoints()) {
+            assertTrue(prevY - w.y() <= 1.0 + 1.0E-9, "…and nothing drops: " + w);
+            prevY = w.y();
+        }
+    }
+
+    @Test
+    void slowFallingRemovesThePenaltyAndTheDropWins() {
+        FakeWorld world = armStairArena();
+        var route = planner.plan(new Vec3d(0.5, 69, 0.5), new Vec3d(6.5, 64, 0.5),
+                world, 4000, true, BaritoneStylePlanner.MAX_EXTENT,
+                new BaritoneStylePlanner.FallBudget(13.0, 3.0, 0.0));
+        assertTrue(route.isPresent());
+        assertEquals(64.0, route.get().waypoints().get(0).y(), 1.0E-9,
+                "with a zero damage factor the direct 5-drop wins");
+        assertEquals(dropLaneCost(5.0, 0.0), route.get().cost(), 1.0E-9); // ≈ 36.7744
+    }
+
+    /** The arm-and-stairs arena for the flip pair: a 2-cell arm north off the
+     *  platform (cells (0,2),(0,3), top 69) feeding a 4-step staircase east at
+     *  z=3 (tops 68,67,66,65 at x=1..4; floor 64 from (5,3)). Stair route:
+     *  T (0,1) + T (0,2) + T (0,3) + D (1,3) + D (2,3) + D (3,3) + D (4,3) +
+     *  D (5,3) + DIAG (6,2) + T (6,1) + T (6,0); the 8 arm/stair cells are
+     *  ring-1-obstructed, the last three are clear:
+     *  5·T + 5·D + DIAG + 8·r1 = 17.818960 + 22.451805 + 5.040026 + 8.553104
+     *  = 53.863895. */
+    private static FakeWorld armStairArena() {
+        return FakeWorld.floorAt(64)
+                .wall(-1, 64, -1, 1, 68, 1)   // platform top 69
+                .wall(0, 64, 2, 0, 68, 3)     // arm cells (0,2),(0,3) top 69
+                .wall(1, 64, 3, 1, 67, 3)     // stair top 68
+                .wall(2, 64, 3, 2, 66, 3)     // stair top 67
+                .wall(3, 64, 3, 3, 65, 3)     // stair top 66
+                .block(4, 64, 3);             // stair top 65
+    }
+
+    /** The downward band stretches with the budget: a 12-block drop (inside a
+     *  13-block budget) is representable even though it exceeds the classic
+     *  Y_BAND of 8. Cost: T + r1 + FALL(12, ceil(12−3)=9 → +90) + r1 + 4 T
+     *  = 4.632930 + 113.700650 + 14.255168 = 132.588748. */
+    @Test
+    void deepDropBeyondTheClassicBandIsRepresentable() {
+        FakeWorld world = FakeWorld.floorAt(64).wall(-1, 64, -1, 1, 75, 1); // top 76
+        var route = planner.plan(new Vec3d(0.5, 76, 0.5), new Vec3d(6.5, 64, 0.5),
+                world, 4000, true, BaritoneStylePlanner.MAX_EXTENT,
+                new BaritoneStylePlanner.FallBudget(13.0, 3.0, 1.0));
+
+        assertTrue(route.isPresent(), "12 ≤ budget 13 must be plannable despite Y_BAND 8");
+        assertTrue(route.get().complete());
+        assertEquals(dropLaneCost(12.0, 9.0), route.get().cost(), 1.0E-9);
+        // …and the DEFAULT budget still refuses it (band + maxFall both bind).
+        assertTrue(planner.plan(new Vec3d(0.5, 76, 0.5), new Vec3d(6.5, 64, 0.5),
+                world, 4000, true, BaritoneStylePlanner.MAX_EXTENT).isEmpty());
+    }
+
+    /** Folia: a deep drop whose landing column crosses the readable frontier is
+     *  NOT an edge (deepGroundHeight refuses per block), so nothing past the lip
+     *  is reachable and the plan is empty — never a read across the boundary. */
+    @Test
+    void unreadableDeepColumnYieldsNoDropEdge() {
+        FakeWorld base = FakeWorld.floorAt(64).wall(-1, 64, -1, 1, 75, 1); // top 76
+        CollisionView gated = new CollisionView() {
+            @Override
+            public List<Box> collidingBoxes(Box region) {
+                return base.collidingBoxes(region);
+            }
+
+            @Override
+            public double slipperiness(int x, int y, int z) {
+                return base.slipperiness(x, y, z);
+            }
+
+            @Override
+            public boolean isReadable(int x, int y, int z) {
+                return y >= 70; // the pillar top is readable; the drop column is not
+            }
+        };
+        assertTrue(planner.plan(new Vec3d(0.5, 76, 0.5), new Vec3d(6.5, 64, 0.5),
+                gated, 4000, true, BaritoneStylePlanner.MAX_EXTENT,
+                new BaritoneStylePlanner.FallBudget(13.0, 3.0, 1.0)).isEmpty());
+    }
+
+    // --- WS-NAV: time-sliced resumption ----------------------------------------
+
+    /** Slicing is a pure pause: N slices of 50 expansions reconstruct EXACTLY the
+     *  one-shot route — waypoints, flags, origin and cost (record equality). */
+    @Test
+    void slicedSearchMatchesTheSynchronousPlanExactly() {
+        FakeWorld world = FakeWorld.floorAt(64)
+                .wall(8, 66, 0, 10, 66, 1)
+                .block(11, 64, 3)
+                .block(11, 64, 2).block(11, 65, 2)
+                .block(11, 64, 1).block(11, 65, 1).block(11, 66, 1);
+        var oneShot = planner.plan(new Vec3d(0, 65, 0), new Vec3d(9.5, 67, 0.5), world,
+                Brain.ELEVATION_PLAN_BUDGET, true, Brain.elevationExtent(9));
+
+        var state = planner.begin(new Vec3d(0, 65, 0), new Vec3d(9.5, 67, 0.5), world,
+                true, Brain.elevationExtent(9), BaritoneStylePlanner.FallBudget.DEFAULT,
+                Brain.ELEVATION_PLAN_BUDGET);
+        java.util.Optional<BaritoneStylePlanner.Route> sliced = java.util.Optional.empty();
+        int guard = 0;
+        while (!state.done()) {
+            sliced = planner.step(state, world, 50);
+            assertTrue(++guard <= Brain.ELEVATION_PLAN_BUDGET / 50 + 2, "must terminate");
+        }
+        assertEquals(oneShot, sliced, "slices must reconstruct the one-shot plan exactly");
+    }
+
+    /** No slice may exceed its expansion cap, and a flooding (unreachable-goal)
+     *  search spans many slices — the acceptance bound's unit-level pin. */
+    @Test
+    void sliceCapHoldsAcrossAFloodingSearch() {
+        // A floating unreachable platform: the search exhausts the box space.
+        FakeWorld world = FakeWorld.floorAt(64).wall(8, 65, -1, 10, 67, 1); // top 68
+        var state = planner.begin(new Vec3d(0.5, 64, 0.5), new Vec3d(9.5, 68, 0.5), world,
+                true, Brain.elevationExtent(9), BaritoneStylePlanner.FallBudget.DEFAULT,
+                Brain.ELEVATION_PLAN_BUDGET);
+        int slices = 0;
+        while (!state.done()) {
+            int before = state.expansions();
+            planner.step(state, world, Brain.SEARCH_SLICE_EXPANSIONS);
+            assertTrue(state.expansions() - before <= Brain.SEARCH_SLICE_EXPANSIONS,
+                    "a slice may never exceed its cap");
+            slices++;
+            assertTrue(slices <= Brain.ELEVATION_PLAN_BUDGET / Brain.SEARCH_SLICE_EXPANSIONS + 1,
+                    "…and the total budget still bounds the search");
+        }
+        assertTrue(slices >= 10,
+                "a flooding search must span many decision ticks (got " + slices + ")");
     }
 }

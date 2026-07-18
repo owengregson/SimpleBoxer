@@ -84,4 +84,32 @@ class MoveCostsTest {
         assertTrue(half > MoveCosts.FALL_N_BLOCKS[1] && half < MoveCosts.FALL_N_BLOCKS[2],
                 "a 1.5-block fall lies between the 1- and 2-block table entries");
     }
+
+    // --- WS-NAV: fall-tick pins for the deep-drop cost model -------------------
+    // distanceToTicks integrates v(t) = (0.98^t − 1)·(−3.92) per tick and credits
+    // the last tick fractionally. Cumulative blocks fallen after t ticks:
+    // S8 = 2.694561, S11 = 4.844478, S17 = 10.806525 (v9 = 0.651709,
+    // v12 = 0.843910, v18 = 1.195070).
+
+    @Test
+    void fallTicksOfThreeBlocks() {
+        // 3 − S8 = 0.305439, /v9 = 0.4687 → 9.4687 ticks.
+        assertEquals(9.4687, MoveCosts.fallTicks(3.0), 1.0E-3);
+    }
+
+    @Test
+    void fallTicksOfFiveBlocks() {
+        // 5 − S11 = 0.155522, /v12 = 0.1843 → 12.1843 ticks.
+        assertEquals(12.1843, MoveCosts.fallTicks(5.0), 1.0E-3);
+    }
+
+    @Test
+    void fallTicksOfTwelveBlocks() {
+        // 12 − S17 = 1.193475, /v18 = 0.9987 → 18.9987 ticks. As in the 3- and
+        // 5-block pins above, the whole part is the INDEX OF THE CONSUMED VELOCITY
+        // SAMPLE (v18 here): tick 0 covers no ground (Baritone's leave-the-lip
+        // convention, pinned by fallVelocityMatchesTheVanillaDragIntegral), so the
+        // counter runs one ahead of the physical 17.9987 falling ticks.
+        assertEquals(18.9987, MoveCosts.fallTicks(12.0), 1.0E-3);
+    }
 }

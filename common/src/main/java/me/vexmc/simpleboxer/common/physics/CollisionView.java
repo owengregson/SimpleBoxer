@@ -11,6 +11,23 @@ import org.jetbrains.annotations.Nullable;
  */
 public interface CollisionView {
 
+    /**
+     * The tallest column, in block rows, an implementation must serve
+     * FAITHFULLY from {@link #collidingBoxes}: the nav layer's deep ground scan
+     * ({@code NavGeometry.deepGroundHeight}) issues a single column
+     * {@code dropBudget + 1} blocks tall — the budget is hard-capped at
+     * {@code Brain.SAFE_DROP_CAP} (16) — and a block-grid implementation walks
+     * one border row past each end, so 16 + 1 + 2 = 19 rows must survive any
+     * defensive clamp (pinned by {@code BrainTest}). An implementation MAY
+     * clamp a runaway (pathological) region beyond this, but clamping below it
+     * silently amputates the TOP of a legitimate ground-scan column — the very
+     * surface the boxer stands on — so over any platform with air beneath the
+     * scan reads "no ground within budget", every direction reads ledge-ward,
+     * and the ledge guard releases every movement key: a fully frozen boxer
+     * with zero exceptions to trace.
+     */
+    int DEEP_SCAN_COLUMN_BLOCKS = 24;
+
     /** Block collision boxes intersecting {@code region}, world coordinates. */
     @NotNull List<Box> collidingBoxes(@NotNull Box region);
 

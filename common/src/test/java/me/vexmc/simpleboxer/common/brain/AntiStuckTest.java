@@ -20,7 +20,7 @@ class AntiStuckTest {
     private static Perception perception(double x, double y, double z,
             boolean hasTarget, boolean hcol) {
         SelfState self = new SelfState(x, y, z, Vec3d.ZERO, true, hcol,
-                1.0, 1.0, UseItemState.NONE, false, 0.1, -1);
+                1.0, 1.0, UseItemState.NONE, false, 0.1, -1, 20.0, 0, 3.0, 1.0, false);
         TargetState target = hasTarget
                 ? new TargetState(x + 3, y, z, y + 1.62, Vec3d.ZERO, 0.0, 0.0, 0.0, 3.0, false)
                 : null;
@@ -90,7 +90,8 @@ class AntiStuckTest {
         Perception p = perception(0.5, 64, 0.5, true, true);
         MoveHeading intended = new MoveHeading(new Vec3d(0, 0, 1)); // +Z into the wall
 
-        MoveHeading detour = antiStuck.detour(p, intended, world, mem);
+        MoveHeading detour = antiStuck.detour(p, intended, world, mem,
+                ContextSteering.LEDGE_MAX_DROP);
 
         assertFalse(detour.isStill(), "a stuck boxer must get a heading to try");
         // Roughly perpendicular to the intended heading.
@@ -110,8 +111,10 @@ class AntiStuckTest {
         Perception p = perception(0.5, 64, 0.5, true, true);
         MoveHeading intended = new MoveHeading(new Vec3d(0, 0, 1));
 
-        MoveHeading first = antiStuck.detour(p, intended, world, mem);
-        MoveHeading second = antiStuck.detour(p, intended, world, mem);
+        MoveHeading first = antiStuck.detour(p, intended, world, mem,
+                ContextSteering.LEDGE_MAX_DROP);
+        MoveHeading second = antiStuck.detour(p, intended, world, mem,
+                ContextSteering.LEDGE_MAX_DROP);
 
         // Opposite sides on successive ticks -> the two headings are reversed.
         double dot = first.dirWorld().horizontalNormalized()
@@ -129,7 +132,8 @@ class AntiStuckTest {
         Perception p = perception(0.5, 64, 0.5, true, true);
         MoveHeading intended = new MoveHeading(new Vec3d(0, 0, 1)); // facing +Z
 
-        MoveHeading detour = antiStuck.detour(p, intended, world, mem);
+        MoveHeading detour = antiStuck.detour(p, intended, world, mem,
+                ContextSteering.LEDGE_MAX_DROP);
 
         // Cornered -> reverse straight back (−Z).
         assertTrue(detour.dirWorld().z() < -0.99, "cornered boxer should back away, got " + detour.dirWorld());
@@ -141,6 +145,7 @@ class AntiStuckTest {
         FakeWorld world = FakeWorld.floorAt(64);
         Perception p = perception(0.5, 64, 0.5, true, true);
 
-        assertTrue(antiStuck.detour(p, MoveHeading.STILL, world, mem).isStill());
+        assertTrue(antiStuck.detour(p, MoveHeading.STILL, world, mem,
+                ContextSteering.LEDGE_MAX_DROP).isStill());
     }
 }

@@ -54,6 +54,10 @@ public final class SBTesterPlugin extends JavaPlugin {
             return;
         }
 
+        // The suites assert boxer behavior; a wandering creeper or skeleton
+        // must never be part of the arena.
+        TestEnvironment.impose(this);
+
         boolean mental = getServer().getPluginManager().getPlugin("Mental") != null;
         boolean ocm = getServer().getPluginManager().getPlugin("OldCombatMechanics") != null;
         if (mental || ocm) {

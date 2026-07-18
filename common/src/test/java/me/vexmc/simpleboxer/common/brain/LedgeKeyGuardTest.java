@@ -49,7 +49,7 @@ class LedgeKeyGuardTest {
         assertEquals(1.0, quantized.strafe(), "0.38 ledge-ward must press the strafe key");
 
         MoveInput masked = LedgeKeyGuard.mask(quantized, heading, YAW_SOUTH,
-                rimWorld(), rimStance());
+                rimWorld(), rimStance(), ContextSteering.LEDGE_MAX_DROP);
         assertEquals(1.0, masked.forward(), "the safe along-edge key survives");
         assertEquals(0.0, masked.strafe(), "the key over the lip is released");
         assertTrue(masked.sprint(), "sprint passes through untouched");
@@ -64,7 +64,7 @@ class LedgeKeyGuardTest {
         MoveInput strafeOnly = new MoveInput(0.0, 1.0, false, true, false);
 
         MoveInput masked = LedgeKeyGuard.mask(strafeOnly, heading, YAW_SOUTH,
-                rimWorld(), rimStance());
+                rimWorld(), rimStance(), ContextSteering.LEDGE_MAX_DROP);
         assertEquals(0.0, masked.forward());
         assertEquals(0.0, masked.strafe(), "no fabricated keys: the unsafe one just lifts");
         assertTrue(masked.sprint());
@@ -80,8 +80,30 @@ class LedgeKeyGuardTest {
         Box openStance = NavGeometry.playerBox(0.0, 65.0, 0.5);
 
         MoveInput masked = LedgeKeyGuard.mask(diagonal, heading, YAW_SOUTH,
-                rimWorld(), openStance);
+                rimWorld(), openStance, ContextSteering.LEDGE_MAX_DROP);
         assertEquals(1.0, masked.forward());
         assertEquals(1.0, masked.strafe());
+    }
+
+    /** A within-budget drop keeps its keys — the guard now discriminates by the
+     *  caller's budget instead of masking every 3-plus drop for everyone. */
+    @Test
+    void withinBudgetDropKeepsTheKey() {
+        // The rim world with a shelf 5 below past the lip (top 60 vs rim top 65).
+        FakeWorld world = FakeWorld.empty()
+                .box(new Box(-4, 64, -4, 1, 65, 8))
+                .box(new Box(1, 59, -4, 6, 60, 8));
+        MoveHeading heading = new MoveHeading(
+                new Vec3d(0.38, 0.0, 0.925).horizontalNormalized(), false, 1.0);
+        MoveInput quantized = new MotorQuantizer().toInput(
+                heading, YAW_SOUTH, true, Intent.JumpHint.NONE, false);
+
+        MoveInput kept = LedgeKeyGuard.mask(quantized, heading, YAW_SOUTH,
+                world, rimStance(), 13.0);
+        assertEquals(1.0, kept.strafe(), "a 5-drop within a 13 budget keeps the key");
+
+        MoveInput masked = LedgeKeyGuard.mask(quantized, heading, YAW_SOUTH,
+                world, rimStance(), ContextSteering.LEDGE_MAX_DROP);
+        assertEquals(0.0, masked.strafe(), "the 3.0 default still releases it");
     }
 }

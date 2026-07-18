@@ -23,7 +23,7 @@ class ContextSteeringTest {
     private static Perception perceptionAt(double x, double y, double z, Vec3d velocity) {
         Perception.SelfState self = new Perception.SelfState(
                 x, y, z, velocity, true, false, 1.0, 1.0,
-                Perception.UseItemState.NONE, false, 0.1, -1);
+                Perception.UseItemState.NONE, false, 0.1, -1, 20.0, 0, 3.0, 1.0, false);
         return new Perception(self, null, Perception.TerrainView.OPEN,
                 Perception.InventoryView.EMPTY, Perception.CombatState.IDLE, 0);
     }
@@ -64,27 +64,39 @@ class ContextSteeringTest {
     }
 
     @Test
-    void pursuitWalksOffLedgeTowardTarget() {
-        // A raised platform (top y=64) covering x<=1, with a sheer drop to the East
-        // (a void beyond x=1). The target sits past the edge, so the goal wants East.
-        FakeWorld world = FakeWorld.empty().wall(-5, 63, -5, 0, 63, 5);
-        // Perched at the eastern rim, already pressing east at a sprint.
+    void pursuitWalksOffALedgeWithinItsDropBudget() {
+        // A platform (top 64) with a landing floor 5 below (top 59) past the rim.
+        // At the no-gear budget (13) the 5-drop has ground within budget — not a
+        // ledge at all: the pursuit heading stays dead East at full pace, and no
+        // sneak ease-off fires. The DEFAULT budget (3.0) still deflects.
+        FakeWorld world = FakeWorld.empty()
+                .wall(-5, 63, -5, 0, 63, 5)   // platform, top 64
+                .wall(1, 58, -5, 8, 58, 5);   // landing, top 59 (5 below)
         Perception p = perceptionAt(0.9, 64, 0.5, EAST.scale(0.3));
 
-        // A survival/default goal (mayLeaveLedges == false) refuses the edge: it
-        // deflects to pace the rim rather than stepping off toward the target.
-        MoveHeading paces = steering.steer(p, EAST, world, false);
-        assertTrue(paces.dirWorld().normalized().dot(EAST) < 0.99,
-                "a ledge-averse boxer should deflect off the rim, got dot="
-                        + paces.dirWorld().normalized().dot(EAST));
-
-        // A pursuing goal (mayLeaveLedges == true) walks straight off the edge
-        // toward the target, exactly like a real client chasing an opponent.
-        MoveHeading chases = steering.steer(p, EAST, world, true);
+        MoveHeading chases = steering.steer(p, EAST, world, 13.0);
         assertFalse(chases.isStill(), "pursuit should keep moving toward the target");
-        double dotEast = chases.dirWorld().normalized().dot(EAST);
-        assertTrue(dotEast > 0.99,
-                "pursuit should advance off the ledge toward the target, got dot=" + dotEast);
+        assertTrue(chases.dirWorld().normalized().dot(EAST) > 0.99,
+                "a within-budget drop is a deliberate descent, got dot="
+                        + chases.dirWorld().normalized().dot(EAST));
+        assertFalse(chases.nearLedge(), "no sneak ease-off on a budgeted drop");
+
+        MoveHeading paces = steering.steer(p, EAST, world); // the 3.0 default
+        assertTrue(paces.dirWorld().normalized().dot(EAST) < 0.99,
+                "the ledge-averse default still refuses the 5-drop, got dot="
+                        + paces.dirWorld().normalized().dot(EAST));
+    }
+
+    @Test
+    void pursuitRefusesALedgeBeyondItsDropBudget() {
+        // The same rim over VOID — deeper than any budget. Pursuit deflects too:
+        // the old mayLeaveLedges=true walked off 23-block cliffs for free.
+        FakeWorld world = FakeWorld.empty().wall(-5, 63, -5, 0, 63, 5);
+        Perception p = perceptionAt(0.9, 64, 0.5, EAST.scale(0.3));
+        MoveHeading paces = steering.steer(p, EAST, world, 13.0);
+        assertTrue(paces.dirWorld().normalized().dot(EAST) < 0.99,
+                "a bottomless edge deflects even pursuit, got dot="
+                        + paces.dirWorld().normalized().dot(EAST));
     }
 
     @Test
@@ -131,7 +143,7 @@ class ContextSteeringTest {
             double targetX, double targetZ) {
         Perception.SelfState self = new Perception.SelfState(
                 x, y, z, velocity, true, false, 1.0, 1.0,
-                Perception.UseItemState.NONE, false, 0.1, -1);
+                Perception.UseItemState.NONE, false, 0.1, -1, 20.0, 0, 3.0, 1.0, false);
         double dx = targetX - x;
         double dz = targetZ - z;
         double dist = Math.sqrt(dx * dx + dz * dz);

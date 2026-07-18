@@ -1,5 +1,87 @@
 # Changelog
 
+## 0.8.0 — flow: one hand, one budget, zero stalls
+
+Boxers now fight and move like one continuous mind: pathfinding can never
+freeze a tick or interrupt a combo, descents are chosen by predicted fall
+damage, the active hand belongs to a single state machine, and a blockhitting
+boxer finally crawls — and eats knockback — like a real client. Everything
+still sits *upstream* of the move input, exactly like a real player.
+
+### Navigation — flow
+- **Planning never stalls a tick.** Searches run as ~50-expansion slices per
+  decision tick from brain memory while the boxer keeps steering in the
+  direction it was already moving; the synchronous whole-plan-in-one-tick call
+  (measured at 20 ms to multiple SECONDS of server stall on flooding
+  searches) is gone from the brain entirely.
+- **The straight line wins instantly.** A ~16-stride corridor probe (about
+  100–9000× cheaper than a plan) validates the direct line — auto-steps, one
+  jump, and drops within the damage budget included — and skips planning
+  outright while it stays clear, superseding committed routes so a boxer never
+  runs a stale detour past an open lane.
+- **Pathfinding never interrupts PvP.** A landed-hit stamp holds every search
+  inside the 6-block re-close band for two seconds; the elevation gate
+  measures the gap to the target's GROUND (not its airborne body) and needs it
+  to persist ten ticks, so knockback lofts and jump arcs can no longer hijack
+  a combo into a route plan; the climb latch anchors to the route's real end
+  floor instead of a mid-air target Y.
+- **Routes are joined, never re-walked.** The follower projects the boxer onto
+  the path and consumes level waypoints by plane-crossing (monotonically, never
+  backwards), keeps the strict stand-on rule for climbs, adds an
+  overshoot-aware rule for drops, and steers at a point 1.75 blocks ahead —
+  and a w-tap release now holds a committed route instead of wiping it every
+  landed hit.
+- **Cold starts are not "stuck".** An accelerating boxer is never rescued into
+  the anti-stuck detour, and corridor-clear lines exempt the whole escalation
+  (entity pressure resolves by pressing the verified line, not wiggling).
+
+### Navigation — descents
+- **Deliberate ledge drops, budgeted by real fall damage.** A pure fall-damage
+  model — safe fall 3 + Jump Boost, Feather Falling ×3 + Protection ×1 EPF
+  capped at 20 over 25, Slow Falling negates, the max-health attribute with
+  modifiers, all read live off the worn armor and aged through the perception
+  line — budgets half current max HP and threads ONE number through steering,
+  the key guard, anti-stuck, and the planner. A survivable drop to a player
+  below is taken (walk-off, never jump-off — the jump apex adds 1.25 blocks of
+  fall); a drop over budget routes to stairs and blocks instead; and pursuit's
+  old INFINITE ledge tolerance is gone — a chasing boxer no longer walks off a
+  23-block cliff it was never asked to survive.
+- **The planner sees deep floors.** Fall edges now scan to the full drop
+  budget (the old model was blind below 3–4 blocks), priced at 10 ticks per
+  predicted damage point so a comparably-close walking descent still wins.
+
+### Combat & the hand
+- **One owner for the active hand.** Every slot swap, use start/release, and
+  attack click routes through a single pure state machine: goals submit
+  requests (eat / throw / cast / block-tap), and only the machine emits wire
+  intents. A slot ledger tracks in-flight swaps so a use can never fire on the
+  wrong item (the blockhit-throws-the-pot class); an interrupted hold always
+  releases before the interrupting action (the stranded-shield and
+  mid-retreat-eat classes); a hold budget bounds runaway use; and a target-less
+  boxer adopts operator slot changes instead of fighting them.
+- **Blockhitting boxers crawl like real clients.** The client-only ×0.2
+  use-item input slowdown is modeled end to end — a blockhitter moves at 1.12
+  b/s instead of an illegal full-sprint 5.61, no longer out-runs its own
+  received knockback ("takes no hits"), no longer ships 0.6-block single-tick
+  sprint-jump bursts mid-block ("jumps forward"), and a stopped sprint cannot
+  re-arm mid-use, exactly per the 1.8 meta.
+- **Respawns come up swinging.** A new life resets every mid-episode brain
+  transient (routine FSMs, committed routes, combo state), so a boxer that died
+  mid-heal no longer resumes a dead routine holding its pot slot — the machine
+  re-arms the weapon as its baseline.
+
+### Fidelity & harness
+- **The collision view honors the deep-scan column.** Its per-query vertical
+  clamp silently amputated the drop-budget ground scan over floating arenas —
+  every direction read as a bottomless ledge and the key guard froze all
+  movement, on every version at once. The clamp now derives from the shared
+  scan-column contract, pinned so the two can never disagree again.
+- **Hermetic test arenas.** Natural hostiles are embargoed from the tester
+  worlds (gamerules, chunk-load sweeps, a spawn net, and
+  `spawn-monsters=false` provisioning): on 1.18.2's deep floor the floating
+  pads were the only spawnable surface in range and accumulated skeletons were
+  assassinating low-health test boxers mid-round; 1.17.1 was passing on luck.
+
 ## 0.7.1 — the ledge guard covers the keys
 
 ### Navigation

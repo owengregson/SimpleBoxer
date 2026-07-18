@@ -89,11 +89,14 @@ public final class AntiStuck {
      * are walled the boxer is cornered, so we reverse straight back off the
      * obstacle. {@code speedScale} is reduced in every case.
      *
+     * <p>{@code dropBudget} is the goal's drop budget in blocks, threaded to the
+     * escape heading's ledge flag so a detour obeys the same descent rule.</p>
+     *
      * <p>Returns {@link MoveHeading#STILL} when there is no intended heading to
      * detour from.
      */
     public @NotNull MoveHeading detour(@NotNull Perception p, @NotNull MoveHeading intended,
-            @NotNull CollisionView world, @NotNull BrainMemory mem) {
+            @NotNull CollisionView world, @NotNull BrainMemory mem, double dropBudget) {
         Vec3d flat = intended.dirWorld().horizontalNormalized();
         if (flat.lengthSqr() < 1.0E-8) {
             return MoveHeading.STILL; // nothing to slide off of
@@ -112,19 +115,20 @@ public final class AntiStuck {
 
         Box box = NavGeometry.playerBox(p.self().x(), p.self().y(), p.self().z());
         if (!NavGeometry.wallAhead(world, box, preferred, NavGeometry.LOOK_AHEAD)) {
-            return heading(preferred, box, world, DETOUR_SPEED_SCALE);
+            return heading(preferred, box, world, DETOUR_SPEED_SCALE, dropBudget);
         }
         if (!NavGeometry.wallAhead(world, box, alternate, NavGeometry.LOOK_AHEAD)) {
-            return heading(alternate, box, world, DETOUR_SPEED_SCALE);
+            return heading(alternate, box, world, DETOUR_SPEED_SCALE, dropBudget);
         }
 
         // Cornered on both flanks — peel straight back off the obstacle.
-        return heading(flat.scale(-1.0), box, world, BACKOFF_SPEED_SCALE);
+        return heading(flat.scale(-1.0), box, world, BACKOFF_SPEED_SCALE, dropBudget);
     }
 
     /** A heading whose ledge flag is computed for the direction actually chosen. */
-    private static MoveHeading heading(Vec3d dir, Box box, CollisionView world, double speedScale) {
-        boolean ledge = NavGeometry.ledgeAhead(world, box, dir, NavGeometry.LOOK_AHEAD, 3.0);
+    private static MoveHeading heading(Vec3d dir, Box box, CollisionView world,
+            double speedScale, double dropBudget) {
+        boolean ledge = NavGeometry.ledgeAhead(world, box, dir, NavGeometry.LOOK_AHEAD, dropBudget);
         return new MoveHeading(dir, ledge, speedScale);
     }
 

@@ -50,7 +50,7 @@ class CritSpamTest {
     private static Perception perceive(ClientPhysics physics, long serverTick) {
         SelfState self = new SelfState(physics.x(), physics.y(), physics.z(),
                 physics.velocity(), physics.onGround(), physics.horizontalCollision(),
-                1.0, 1.0, UseItemState.NONE, false, 0.1, -1);
+                1.0, 1.0, UseItemState.NONE, false, 0.1, -1, 20.0, 0, 3.0, 1.0, false);
         TargetState target = new TargetState(0.0, physics.y(), 2.0, physics.y() + 1.62,
                 Vec3d.ZERO, 0.0, 0.0, 0.0, 2.0, false);
         return new Perception(self, target, TerrainView.OPEN, InventoryView.EMPTY,
@@ -61,7 +61,7 @@ class CritSpamTest {
     private static Perception crafted(double y, Vec3d velocity, boolean onGround,
             double targetDistance, long serverTick) {
         SelfState self = new SelfState(0.0, y, 0.0, velocity, onGround, false,
-                1.0, 1.0, UseItemState.NONE, false, 0.1, -1);
+                1.0, 1.0, UseItemState.NONE, false, 0.1, -1, 20.0, 0, 3.0, 1.0, false);
         TargetState target = new TargetState(0.0, y, targetDistance, y + 1.62,
                 Vec3d.ZERO, 0.0, 0.0, 0.0, targetDistance, false);
         return new Perception(self, target, TerrainView.OPEN, InventoryView.EMPTY,

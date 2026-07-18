@@ -45,7 +45,8 @@ class ClickControllerTest {
 
     private static SelfState selfAtOrigin() {
         return new SelfState(0.0, 64.0, 0.0, Vec3d.ZERO,
-                true, false, 1.0, 1.0, UseItemState.NONE, false, 0.1, -1);
+                true, false, 1.0, 1.0, UseItemState.NONE, false, 0.1, -1,
+                20.0, 0, 3.0, 1.0, false);
     }
 
     private static TargetState targetAt(double x, double y, double z, Vec3d vel) {
@@ -166,7 +167,8 @@ class ClickControllerTest {
 
     private static SelfState airborneSelf(double vy) {
         return new SelfState(0.0, 64.0, 0.0, new Vec3d(0.0, vy, 0.0),
-                false, false, 1.0, 1.0, UseItemState.NONE, false, 0.1, -1);
+                false, false, 1.0, 1.0, UseItemState.NONE, false, 0.1, -1,
+                20.0, 0, 3.0, 1.0, false);
     }
 
     private static Perception critPerception(SelfState self, int pingMs, long serverTick) {

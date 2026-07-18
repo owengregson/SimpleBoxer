@@ -119,6 +119,52 @@ class ClientPhysicsTest {
         assertEquals(SPRINT_TERMINAL, perTick, 1.0E-6, "sprint displacement per tick (5.612 m/s)");
     }
 
+    /**
+     * Item use (blocking, eating, drawing) multiplies both input impulses ×0.2
+     * on a real client ({@code LocalPlayer.aiStep}); the drag recursion is
+     * linear in the acceleration, so the terminal speed is exactly one fifth
+     * of the sprint terminal: (0.2 × 0.1274) / 0.454 = 0.0561233… b/t
+     * (1.12 m/s — the crawl an enemy sees from a real blockhitter).
+     */
+    @Test
+    void usingAnItemSlowsSprintToExactlyOneFifth() {
+        FlatWorld world = stone();
+        ClientPhysics physics = grounded(world);
+        MoveInput blockhit = MoveInput.sprintForward().withUsingItem(true);
+        double perTick = 0.0;
+        for (int tick = 0; tick < 200; tick++) {
+            double before = physics.z();
+            physics.step(blockhit, 0.0f, world);
+            perTick = physics.z() - before;
+        }
+        assertEquals(SPRINT_TERMINAL * 0.2, perTick, 1.0E-7,
+                "blockhit displacement per tick (1.12 m/s)");
+    }
+
+    /**
+     * The sprint-jump burst mid-use: from the using-sprint steady state the
+     * jump tick carries last tick's post-drag velocity (terminal × 0.546),
+     * gains the 0.2 sprint-jump push, and accelerates one using-scaled ground
+     * tick (0.2 × 0.98 × 0.13 × magic ≈ 0.025480) —
+     * 0.0561233 × 0.546 + 0.2 + 0.0254800 = 0.2561233… blocks in that tick,
+     * against 0.4806166 unslowed: the "jumps forward somehow" burst halved.
+     */
+    @Test
+    void sprintJumpMidUseShipsTheSlowedBurst() {
+        FlatWorld world = stone();
+        ClientPhysics physics = grounded(world);
+        MoveInput blockhit = MoveInput.sprintForward().withUsingItem(true);
+        for (int tick = 0; tick < 200; tick++) {
+            physics.step(blockhit, 0.0f, world);
+        }
+        double before = physics.z();
+        physics.step(new MoveInput(1.0, 0.0, true, true, false, true), 0.0f, world);
+        double jumpTick = physics.z() - before;
+        double expected = SPRINT_TERMINAL * 0.2 * 0.546 + 0.2
+                + 0.2 * 0.98 * 0.13 * (0.21600002 / 0.216);
+        assertEquals(expected, jumpTick, 1.0E-7, "mid-use sprint-jump burst");
+    }
+
     @Test
     void sneakCrawlsAtThirtyPercent() {
         FlatWorld world = stone();

@@ -135,10 +135,17 @@ final class BoxerImpl implements Boxer {
     /**
      * The last matured {@link PlayerTraits} snapshot, mirrored into
      * {@link Perception.SelfState} so the brain times its jumps from the same
-     * aged walk-speed / jump-boost values the integrator runs on.
+     * aged walk-speed / jump-boost values the integrator runs on — and prices
+     * deliberate ledge drops from the same aged fall block (max health, worn
+     * EPF, safe-fall distance, multiplier, Slow Falling).
      */
     private double knownWalkSpeed = ClientPhysics.DEFAULT_WALK_SPEED;
     private int knownJumpBoost = -1;
+    private double knownMaxHealth = 20.0;
+    private int knownFallEpf;
+    private double knownSafeFall = 3.0;
+    private double knownFallDamageMultiplier = 1.0;
+    private boolean knownSlowFalling;
     /** Previous matured target yaw, for the opponent-aim tracking-rate estimate. */
     private float prevTargetYaw;
     private boolean hasPrevTargetYaw;
@@ -356,6 +363,11 @@ final class BoxerImpl implements Boxer {
             // values the integrator was just tuned with.
             knownWalkSpeed = knownTraits.walkSpeed();
             knownJumpBoost = knownTraits.jumpBoostAmplifier();
+            knownMaxHealth = knownTraits.maxHealth();
+            knownFallEpf = knownTraits.fallEpf();
+            knownSafeFall = knownTraits.safeFallDistance();
+            knownFallDamageMultiplier = knownTraits.fallDamageMultiplier();
+            knownSlowFalling = knownTraits.slowFalling();
         }
 
         // 2. Decide via the brain, unless paused (a paused client still receives
@@ -375,7 +387,10 @@ final class BoxerImpl implements Boxer {
             syncSprint(out.sprintDesire());
         }
         queueInput(input, now);
-        physics.step(input, aimYaw, collisionView);
+        // The integrator gets the item-use state (vanilla's client-only ×0.2
+        // input slowdown); the wire input packet carries no such bit, so
+        // queueInput above ships the raw keys exactly as a real client's does.
+        physics.step(input.withUsingItem(usingItemTicks > 0), aimYaw, collisionView);
         pushAwayFromNeighbors();
 
         // Matrix forensics: trace the sim vs server-entity Y whenever the boxer is
@@ -523,6 +538,7 @@ final class BoxerImpl implements Boxer {
                 Location location = spawned.player().getLocation();
                 physics.teleport(location.getX(), location.getY(), location.getZ());
                 brain.snapAim(location.getYaw(), location.getPitch());
+                brain.onRespawn();
                 aimYaw = location.getYaw();
                 aimPitch = location.getPitch();
                 declareClientLoaded();
@@ -670,7 +686,8 @@ final class BoxerImpl implements Boxer {
                 healthPct(), hungerPct(),
                 usingItemTicks > 0 ? Perception.UseItemState.USING : Perception.UseItemState.NONE,
                 safeIsBlocking(spawned.player()),
-                knownWalkSpeed, knownJumpBoost);
+                knownWalkSpeed, knownJumpBoost, knownMaxHealth, knownFallEpf,
+                knownSafeFall, knownFallDamageMultiplier, knownSlowFalling);
 
         Perception.TargetState targetState = null;
         TargetView view = perceived;
@@ -930,8 +947,13 @@ final class BoxerImpl implements Boxer {
             actions.offer(new Action.SelectSlot(select.slot()), now);
         } else if (action instanceof ActionIntent.StartUse use) {
             actions.offer(new Action.UseItem(use.mainHand()), now);
+            // A real client's isUsingItem flips the tick it clicks — the packet
+            // ships later, but the ×0.2 input slowdown starts NOW. The dispatch
+            // refresh keeps a driven hold alive; a momentary use lapses.
+            usingItemTicks = 4;
         } else if (action instanceof ActionIntent.ReleaseUse) {
             actions.offer(new Action.ReleaseUse(), now);
+            usingItemTicks = 0;
         }
     }
 
@@ -1040,6 +1062,13 @@ final class BoxerImpl implements Boxer {
         if (sprintActionsInFlight == 0 && serverSprinting
                 && !spawned.player().isSprinting()) {
             serverSprinting = false;
+        }
+        // canStartSprinting has !isUsingItem() on every version: an ongoing
+        // sprint SURVIVES item use (the whole point of blockhitting), but a
+        // stopped one cannot re-arm until the use ends — mirror that here so
+        // a mid-block re-arm never ships a packet a client couldn't send.
+        if (sprinting && !serverSprinting && usingItemTicks > 0) {
+            return;
         }
         if (serverSprinting == sprinting) {
             return;

@@ -82,6 +82,56 @@ public final class BrainMemory {
     public double routeStepFace = Double.NaN;
     public double routeStepRise;
 
+    /* The active-hand machine's slot ledger + hold lifecycle. Written only by
+     * HandControl; goals may read the query methods (using/holdingEat) through
+     * the memory they already hold in decide(). */
+    public final HandControl.HandState hand = new HandControl.HandState();
+
+    /* Combat-exclusion stamp: the motorTick of the last hit this boxer LANDED.
+     * Initialized (and respawn-reset) to HALF of Long.MIN_VALUE, never the raw
+     * minimum: the hold predicate subtracts it from motorTick, and
+     * motorTick − Long.MIN_VALUE overflows negative — which would read as a
+     * permanently-armed combat hold. */
+    public long lastHitTick = Long.MIN_VALUE / 2;
+
+    /* Ground-snapped elevation gap to the target (the target column's standable
+     * surface minus the boxer's feet — the SAME snap the planner's goal uses)
+     * and the count of CONSECUTIVE decision ticks its magnitude has exceeded
+     * the elevation gate: the persistence hysteresis that keeps 1-tick
+     * ballistic dy transients (jump arcs, knockback lofts, Jump Boost apexes)
+     * from firing the planner mid-combo. */
+    public double targetGroundGap;
+    public int elevationGapTicks;
+
+    /* Straight-corridor cache: the last probe verdict, the tick it was taken,
+     * and the target cell it was taken against — any of the three going stale
+     * re-probes the line. */
+    public boolean corridorClear;
+    public long corridorCheckTick = Long.MIN_VALUE / 2;
+    public long corridorGoalCell = Long.MIN_VALUE;
+
+    /* The in-flight time-sliced A*: a bounded number of expansions advance per
+     * decision tick while steering keeps the boxer moving; searchKind records
+     * who asked (the elevation gate, or the stuck rescue's walk/jump passes)
+     * so completion adopts with the right policy. Owning-thread only. */
+    public @Nullable BaritoneStylePlanner.SearchState search;
+    public int searchKind;
+
+    /* Stuck-rescue attempt throttle (decision ticks), separate from
+     * lastPlanTick so an elevation replan cannot starve the rescue or vice
+     * versa. Same half-minimum convention as lastHitTick. */
+    public long lastRescuePlanTick = Long.MIN_VALUE / 2;
+
+    /* The motorTick a search slice last advanced on — the per-tick expansion
+     * cap's book-keeping: a tick that already stepped one search may not begin
+     * (and step) another, so no decision tick ever exceeds one slice. */
+    public long lastSearchStepTick = Long.MIN_VALUE / 2;
+
+    /* The committed route's origin — the plan's start cell centre at its floor.
+     * The follower classifies and consumes waypoint 0 over the segment
+     * [origin → path[0]] exactly like every later [path[i−1] → path[i]]. */
+    public @NotNull Vec3d pathOrigin = Vec3d.ZERO;
+
     /* Per-routine scratch, lazily allocated by routine id. */
     private final Map<String, int[]> intScratch = new HashMap<>();
     private final Map<String, double[]> doubleScratch = new HashMap<>();
@@ -127,9 +177,82 @@ public final class BrainMemory {
         return Math.sqrt(dx * dx + dz * dz);
     }
 
+    /** Margin (blocks/tick) a displacement must GROW by, tick over tick, to read as
+     *  acceleration: vanilla from-rest gains ≥ 0.024/tick while building speed, and
+     *  a pinned boxer's wiggle/grind plateaus far inside the margin. */
+    private static final double SPEED_TREND_EPSILON = 0.01;
+
+    /**
+     * True while the boxer is still GAINING ground speed — the last three completed
+     * ticks' displacement magnitudes are strictly increasing. Vanilla from-rest
+     * acceleration cannot bank {@code AntiStuck}'s net-progress bar inside its flag
+     * window (positions run 0, 0.025, 0.074, 0.246, … — the first ticks are
+     * nearly stationary), so every cold start reads as "no progress" for exactly
+     * the ticks this predicate covers: an accelerating boxer is starting, not
+     * stuck. A genuinely pinned boxer plateaus (wall grind ~0 per tick, detour
+     * wiggle ~constant magnitude), so this never masks a real stall.
+     */
+    public boolean gainingSpeed() {
+        double d1 = tickDisplacement(1);
+        double d2 = tickDisplacement(2);
+        double d3 = tickDisplacement(3);
+        return d1 > d2 + SPEED_TREND_EPSILON && d2 > d3 + SPEED_TREND_EPSILON;
+    }
+
+    /** Displacement magnitude of the {@code age}-th most recent completed tick
+     *  (age 1 = the latest recorded move). */
+    private double tickDisplacement(int age) {
+        int newer = (posCursor - age + PROGRESS_WINDOW) % PROGRESS_WINDOW;
+        int older = (posCursor - age - 1 + PROGRESS_WINDOW) % PROGRESS_WINDOW;
+        double dx = posX[newer] - posX[older];
+        double dz = posZ[newer] - posZ[older];
+        return Math.sqrt(dx * dx + dz * dz);
+    }
+
     /** Forget the cached path (target changed, route failed, or reached). */
     public void clearPath() {
         this.path = null;
         this.pathCursor = 0;
+    }
+
+    /**
+     * Respawn reset: a new life starts with no routine mid-episode, no committed
+     * route, and no combo state — death ended them all. Only the rng (identity
+     * determinism) and the motor duty phase survive. The position history
+     * re-seeds at the respawn point so anti-stuck cannot read the
+     * death-to-spawn relocation as a burst of travel.
+     */
+    public void onRespawn() {
+        incumbentGoal = null;
+        dwellTicks = 0;
+        strafeSign = 1;
+        strafeFlipIn = 0;
+        wtapCountdown = -1;
+        wtapReleaseLeft = 0;
+        wtapRepressed = false;
+        climbTicks = 0;
+        clearPath();
+        lastPlanTick = Long.MIN_VALUE;
+        lastGoalCell = Long.MIN_VALUE;
+        climbLatch = false;
+        climbGoalY = 0.0;
+        waypointTicks = 0;
+        routeStepFace = Double.NaN;
+        routeStepRise = 0.0;
+        hand.reset();
+        lastHitTick = Long.MIN_VALUE / 2;
+        targetGroundGap = 0.0;
+        elevationGapTicks = 0;
+        corridorClear = false;
+        corridorCheckTick = Long.MIN_VALUE / 2;
+        corridorGoalCell = Long.MIN_VALUE;
+        search = null;
+        searchKind = 0;
+        lastRescuePlanTick = Long.MIN_VALUE / 2;
+        lastSearchStepTick = Long.MIN_VALUE / 2;
+        pathOrigin = Vec3d.ZERO;
+        posSeeded = false;
+        intScratch.clear();
+        doubleScratch.clear();
     }
 }

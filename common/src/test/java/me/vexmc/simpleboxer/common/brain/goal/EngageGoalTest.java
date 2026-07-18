@@ -1,5 +1,9 @@
 package me.vexmc.simpleboxer.common.brain.goal;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import me.vexmc.simpleboxer.common.brain.AdaptiveStrafe;
@@ -30,7 +34,8 @@ class EngageGoalTest {
     private static Perception at(double distance) {
         Perception.SelfState self = new Perception.SelfState(
                 0, 64, 0, Vec3d.ZERO, true, false,
-                1.0, 1.0, Perception.UseItemState.NONE, false, 0.1, -1);
+                1.0, 1.0, Perception.UseItemState.NONE, false, 0.1, -1,
+                20.0, 0, 3.0, 1.0, false);
         Perception.TargetState target = new Perception.TargetState(
                 distance, 64, 0, 65.62, Vec3d.ZERO,
                 90.0, 0.0, 0.0, distance, false);
@@ -77,5 +82,55 @@ class EngageGoalTest {
         }
         assertTrue(minLateral > 0.9,
                 "reduced forward dilution should keep the in-band heading strongly tangential");
+    }
+
+    /* ---- Weapon-hand baseline: routines restore their slot only in their own
+     * exit phase, so an interrupted routine (death mid-heal is the canonical
+     * case) leaves its tool slot selected; Engage re-selects on mismatch,
+     * throttled to one in-flight command per 10 decisions. ---- */
+
+    private static final int WEAPON_SLOT = BoxerSettings.DEFAULTS.items().weaponSlot();
+
+    /** As {@link #at(double)} but holding {@code selectedSlot}. */
+    private static Perception holding(int selectedSlot) {
+        Perception.SelfState self = new Perception.SelfState(
+                0, 64, 0, Vec3d.ZERO, true, false,
+                1.0, 1.0, Perception.UseItemState.NONE, false, 0.1, -1,
+                20.0, 0, 3.0, 1.0, false);
+        Perception.TargetState target = new Perception.TargetState(
+                6.0, 64, 0, 65.62, Vec3d.ZERO,
+                90.0, 0.0, 0.0, 6.0, false);
+        Perception.InventoryView inv = new Perception.InventoryView(
+                true, true, true, true, true, selectedSlot);
+        return new Perception(self, target, Perception.TerrainView.OPEN,
+                inv, Perception.CombatState.IDLE, 0);
+    }
+
+    @Test
+    void holdsTheWeaponSlotQuietly() {
+        EngageGoal goal = new EngageGoal(() -> BoxerSettings.DEFAULTS, new AdaptiveStrafe());
+        BrainMemory mem = new BrainMemory(42L);
+        assertInstanceOf(Intent.ActionIntent.None.class,
+                goal.decide(holding(WEAPON_SLOT), mem).action());
+    }
+
+    @Test
+    void respawnResetClearsRoutineScratchRouteAndComboState() {
+        BrainMemory mem = new BrainMemory(42L);
+        mem.ints("potHeal", 5)[0] = 3; // a mid-FSM phase a dead boxer must not resume
+        mem.path = java.util.List.of(new Vec3d(1, 64, 1));
+        mem.pathCursor = 1;
+        mem.climbLatch = true;
+        mem.wtapReleaseLeft = 2;
+        mem.incumbentGoal = "potHeal";
+
+        mem.onRespawn();
+
+        assertEquals(0, mem.ints("potHeal", 5)[0], "routine FSMs restart from phase 0");
+        assertNull(mem.path, "no committed route survives the respawn");
+        assertEquals(0, mem.pathCursor);
+        assertFalse(mem.climbLatch);
+        assertEquals(0, mem.wtapReleaseLeft, "no combo state survives");
+        assertNull(mem.incumbentGoal, "arbitration restarts from the baseline");
     }
 }

@@ -29,6 +29,15 @@ public final class ClientPhysics {
     public static final double DEFAULT_JUMP_STRENGTH = 0.42;
     public static final double SPRINT_SPEED_MULTIPLIER = 1.3;
     public static final double SNEAK_FACTOR = 0.3;
+    /**
+     * The client-only item-use slowdown: {@code LocalPlayer.aiStep} (1.8's
+     * {@code EntityPlayerSP.onLivingUpdate}) multiplies both input impulses
+     * ×0.2 while {@code isUsingItem()} — blocking, eating, drawing. It never
+     * runs server-side, so a clientless boxer that skips it moves ×5 too fast
+     * while blockhitting: it out-runs its own received knockback (reads as
+     * "takes none") and sprint-jumps 0.6 blocks in a tick mid-block.
+     */
+    public static final double USE_ITEM_FACTOR = 0.2;
     /** {@code applyInput} scales held keys ×0.98 before travel sees them. */
     public static final double INPUT_SCALE = 0.98;
     /** 0.6³ — normalizes ground acceleration to the attribute on stone. */
@@ -147,6 +156,10 @@ public final class ClientPhysics {
         if (input.sneak()) {
             strafe *= SNEAK_FACTOR;
             forward *= SNEAK_FACTOR;
+        }
+        if (input.usingItem()) {
+            strafe *= USE_ITEM_FACTOR;
+            forward *= USE_ITEM_FACTOR;
         }
         strafe *= INPUT_SCALE;
         forward *= INPUT_SCALE;

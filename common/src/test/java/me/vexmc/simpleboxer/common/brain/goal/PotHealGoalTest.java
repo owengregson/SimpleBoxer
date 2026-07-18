@@ -47,7 +47,8 @@ class PotHealGoalTest {
             int launched) {
         Perception.SelfState self = new Perception.SelfState(
                 0, 64, 0, Vec3d.ZERO, true, false,
-                healthPct, 1.0, Perception.UseItemState.NONE, false, 0.1, -1);
+                healthPct, 1.0, Perception.UseItemState.NONE, false, 0.1, -1,
+                20.0, 0, 3.0, 1.0, false);
         Perception.TargetState target = new Perception.TargetState(
                 distance, 64, 0, 65.6, Vec3d.ZERO,
                 90.0, 0.0, 0.0, distance, false);
@@ -60,7 +61,8 @@ class PotHealGoalTest {
     private static Perception noTarget(double healthPct) {
         Perception.SelfState self = new Perception.SelfState(
                 0, 64, 0, Vec3d.ZERO, true, false,
-                healthPct, 1.0, Perception.UseItemState.NONE, false, 0.1, -1);
+                healthPct, 1.0, Perception.UseItemState.NONE, false, 0.1, -1,
+                20.0, 0, 3.0, 1.0, false);
         Perception.InventoryView inv = new Perception.InventoryView(
                 true, true, true, true, true, 0);
         return new Perception(self, null, Perception.TerrainView.OPEN,

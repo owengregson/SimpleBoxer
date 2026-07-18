@@ -39,7 +39,7 @@ class RodPokeGoalTest {
     private static Perception perception(boolean hasRod, double distance, Vec3d targetVel) {
         Perception.SelfState self = new Perception.SelfState(
                 0, 0, 0, Vec3d.ZERO, true, false, 1.0, 1.0,
-                Perception.UseItemState.NONE, false, 0.1, -1);
+                Perception.UseItemState.NONE, false, 0.1, -1, 20.0, 0, 3.0, 1.0, false);
         Perception.TargetState target = new Perception.TargetState(
                 4.0, 0.0, 0.0, 1.6, targetVel, 0.0, 0.0, 0.0, distance, false);
         Perception.InventoryView inv = new Perception.InventoryView(

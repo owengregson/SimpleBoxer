@@ -134,7 +134,8 @@ public final class RodPokeGoal implements Goal {
                 st[PHASE] = 2;
                 Intent.FacingIntent atTarget = Intent.FacingIntent.aimAt(t.x(), t.eyeY(), t.z());
                 return new Intent(toTarget, atTarget,
-                        Intent.ActionIntent.startUse(true), false, Intent.JumpHint.NONE);
+                        Intent.ActionIntent.cast(settings.get().items().rodSlot()),
+                        false, Intent.JumpHint.NONE);
             }
             default -> {
                 // Swap back to the weapon and arm the cooldown so Engage combos.

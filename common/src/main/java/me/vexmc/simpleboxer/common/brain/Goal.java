@@ -54,9 +54,11 @@ public interface Goal {
     /**
      * Whether a boxer driven by this goal may walk off ledges toward its heading.
      * Pursuit/engage goals return {@code true} — chasing a target off an edge is
-     * exactly what a real client does. Survival goals (flee/heal/retreat) keep the
-     * default {@code false}: a fleeing boxer must not sprint off a cliff. Threaded
-     * into {@link ContextSteering#steer} to zero the ledge cost while pursuing.
+     * exactly what a real client does — and get the dynamic fall-damage drop
+     * budget (never an unlimited one). Survival goals (flee/heal/retreat) keep
+     * the default {@code false} and the conservative
+     * {@link ContextSteering#LEDGE_MAX_DROP} depth. The brain turns this flag
+     * into the drop budget every motor layer shares.
      */
     default boolean mayLeaveLedges() {
         return false;

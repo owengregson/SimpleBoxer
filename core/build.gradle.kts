@@ -150,9 +150,28 @@ fun registerIntegrationServer(
                     spawn-protection=0
                     view-distance=4
                     simulation-distance=4
+                    spawn-monsters=false
                     motd=SimpleBoxer integration test
                     """.trimIndent() + "\n"
                 )
+            } else {
+                // Long-lived run dirs predate the hostile-mob embargo (the
+                // tester's TestEnvironment): a naturally spawned creeper or
+                // skeleton can kill a mortal boxer mid-case. Pin the property
+                // here too so even the boot-to-settle window spawns nothing.
+                val lines = properties.readLines()
+                val pinned = lines.map {
+                    if (it.startsWith("spawn-monsters=")) "spawn-monsters=false" else it
+                }.let {
+                    if (it.none { line -> line.startsWith("spawn-monsters=") }) {
+                        it + "spawn-monsters=false"
+                    } else {
+                        it
+                    }
+                }
+                if (pinned != lines) {
+                    properties.writeText(pinned.joinToString("\n") + "\n")
+                }
             }
             val log = logFile.get().asFile
             log.parentFile.mkdirs()

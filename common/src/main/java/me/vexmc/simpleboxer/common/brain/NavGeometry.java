@@ -102,8 +102,13 @@ public final class NavGeometry {
 
     /**
      * True when moving {@code ahead} along {@code dir} steps off an edge with no
-     * ground within {@code maxDrop} below — the cue a fleeing boxer must not
-     * sprint off a cliff.
+     * ground within {@code maxDrop} below — the cue a boxer must not walk a drop
+     * deeper than its fall budget. Resolved with ONE downward ground scan of the
+     * shifted footprint ({@link #deepGroundHeight}), so the cost is independent
+     * of the budget depth, and ground at exactly {@code maxDrop} below COUNTS as
+     * ground (inclusive — a budget of N accepts an exactly-N drop, agreeing with
+     * the planner's {@code drop > maxFall + EPS} refusal). An unreadable column
+     * below reads as a ledge — the conservative Folia default.
      */
     public static boolean ledgeAhead(@NotNull CollisionView world, @NotNull Box box,
             @NotNull Vec3d dir, double ahead, double maxDrop) {
@@ -117,12 +122,9 @@ public final class NavGeometry {
         if (collides(world, shifted)) {
             return false; // a wall/step, not a drop
         }
-        for (double dy = PROBE; dy <= maxDrop + 1.0E-6; dy += PROBE) {
-            if (collides(world, shifted.offset(0.0, -dy, 0.0))) {
-                return false; // ground found within the drop budget
-            }
-        }
-        return true;
+        double cx = (shifted.minX() + shifted.maxX()) / 2.0;
+        double cz = (shifted.minZ() + shifted.maxZ()) / 2.0;
+        return Double.isNaN(deepGroundHeight(world, cx, cz, shifted.minY(), maxDrop));
     }
 
     /**
@@ -154,6 +156,49 @@ public final class NavGeometry {
             }
             double top = shape.maxY();
             if (top <= feetY + MAX_JUMP_RISE + 1.0E-6
+                    && (Double.isNaN(best) || top > best)) {
+                best = top;
+            }
+        }
+        return best;
+    }
+
+    /**
+     * The first standable surface top at or below {@code feetY} within
+     * {@code maxDrop} blocks under {@code (x, z)} — {@link #groundHeight}'s
+     * deep-scan twin for deliberate descents, looking DOWN a drop instead of
+     * around the feet. {@code Double.NaN} when nothing tops out inside the
+     * window, or when any block of the CENTRE cell's column is unreadable (the
+     * Folia contract: pricing a descent must never force a read across a region
+     * boundary — an unreadable column is simply not a droppable edge; the
+     * readability gate keys off the probe centre's cell). The
+     * probe footprint is the player's, so a lip the body would catch on the
+     * way down counts as the landing. The window is INCLUSIVE at
+     * {@code feetY − maxDrop}: the column box extends one block further so a
+     * surface exactly at the bound still strictly intersects.
+     */
+    public static double deepGroundHeight(@NotNull CollisionView world, double x, double z,
+            double feetY, double maxDrop) {
+        double half = ClientPhysics.PLAYER_WIDTH / 2.0;
+        int cellX = (int) Math.floor(x);
+        int cellZ = (int) Math.floor(z);
+        int scanTop = (int) Math.floor(feetY);
+        int scanBottom = (int) Math.floor(feetY - maxDrop) - 1;
+        for (int y = scanTop; y >= scanBottom; y--) {
+            if (!world.isReadable(cellX, y, cellZ)) {
+                return Double.NaN;
+            }
+        }
+        Box column = new Box(x - half, feetY - maxDrop - 1.0, z - half,
+                x + half, feetY, z + half);
+        double best = Double.NaN;
+        for (Box shape : world.collidingBoxes(column)) {
+            if (shape.maxX() <= x - half || shape.minX() >= x + half
+                    || shape.maxZ() <= z - half || shape.minZ() >= z + half) {
+                continue; // no horizontal overlap with the probe footprint
+            }
+            double top = shape.maxY();
+            if (top <= feetY + 1.0E-6 && top >= feetY - maxDrop - 1.0E-6
                     && (Double.isNaN(best) || top > best)) {
                 best = top;
             }
@@ -278,22 +323,23 @@ public final class NavGeometry {
 
     /**
      * The soft-clearance fraction for standing in cell {@code (cellX, cellZ)}:
-     * 0.6 when an obstruction sits in the adjacent ring (Chebyshev 1), 0.2
-     * when the nearest is at ring 2, 0.0 when both rings are clear — the
-     * {@code (R − d)/R} shape with R = 2.5 cells. Callers scale by their own
-     * cost unit and MUST memoize per search (up to 24 ground probes per cell).
+     * 0.6 when an obstruction sits in the adjacent ring (Chebyshev 1), else
+     * 0.0. Only the adjacent ring is probed — a second ring triples the probe
+     * count (24 vs 8 ground probes per newly discovered cell) for the majority
+     * of measured plan wall time, while the ring-1 term alone already prices
+     * the hug lane out of open-field routes (see the planner's
+     * {@code CLEARANCE_COST} arithmetic). Callers scale by their own cost
+     * unit and MUST memoize per search.
      */
     public static double clearanceFraction(@NotNull CollisionView world, int cellX, int cellZ,
             double refFloor) {
-        for (int ring = 1; ring <= 2; ring++) {
-            for (int dx = -ring; dx <= ring; dx++) {
-                for (int dz = -ring; dz <= ring; dz++) {
-                    if (Math.max(Math.abs(dx), Math.abs(dz)) != ring) {
-                        continue;
-                    }
-                    if (!standableLevel(world, cellX + dx, cellZ + dz, refFloor)) {
-                        return ring == 1 ? 0.6 : 0.2;
-                    }
+        for (int dx = -1; dx <= 1; dx++) {
+            for (int dz = -1; dz <= 1; dz++) {
+                if (dx == 0 && dz == 0) {
+                    continue;
+                }
+                if (!standableLevel(world, cellX + dx, cellZ + dz, refFloor)) {
+                    return 0.6;
                 }
             }
         }
