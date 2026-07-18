@@ -53,10 +53,45 @@ public final class PotHealGoal implements Goal {
      */
     public static final double HOLD_FLOOR = 0.6;
 
-    /** Distance (blocks) the boxer opens up before it starts drinking. */
+    /** Center of the heal-kite ring the weave holds while potting. */
     private static final double RETREAT_DISTANCE = 4.5;
-    /** Ticks to weave in the splash cloud before re-evaluating. */
+    /**
+     * The phase-0 throw gate: the first pot flies once this much space is open.
+     * Deliberately INSIDE the kite ring — a pressured healer pots at 3.5 and
+     * lets the weave's radial drift finish opening to the ring, instead of
+     * backpedalling the extra block dry.
+     */
+    private static final double THROW_GATE_DISTANCE = 3.5;
+    /**
+     * Failure timeout on the confirm window: a launch the server never
+     * confirms within this many weave ticks counts against the fail streak. A
+     * CONFIRMED launch settles the window early at {@link #RETHROW_MIN_TICKS}
+     * — this ceiling only paces the failure path (it covers a ~500 ms RTT's
+     * confirmation lag).
+     */
     private static final int WAIT_TICKS = 10;
+    /**
+     * Fewest weave ticks between a throw and the next, even with an instant
+     * confirmation: with the swap front-loaded into the retreat the rethrow
+     * cycle is throw → 4 confirm-weave ticks → throw = 5 ticks/pot, the fast
+     * edge of a human pot-spammer's cadence (splash pots have no use
+     * cooldown; the old fixed 12-tick cycle was the robotic tell).
+     *
+     * <p>Era-safety of the floor, against Spigot's use-item spam limiter
+     * ({@code PlayerConnection.checkLimit}, decompiled IDENTICAL from 1.17.1
+     * Paper through 26.1.2; threshold {@code incoming-packet-spam-threshold}
+     * = 300 ms): a packet ≥300 ms after the last accepted-and-stamped one
+     * re-stamps and RESETS the strike count; packets inside the window only
+     * count strikes ({@code limitedPackets++ >= 8} drops). A constant-period
+     * stream of period P therefore peaks at ⌈300/P⌉ − 1 strikes before the
+     * window from the frozen stamp expires and resets — reaching the 9th
+     * in-window use-item needs sustained P &lt; 300/8 = 37.5 ms, sub-tick
+     * territory no whole-tick cadence can produce. This 5-tick cycle (250 ms)
+     * peaks at ONE strike of the 8 allowed (verified live on 1.17.1: 251 ms
+     * inter-throw deltas, every use-item accepted), so the floor is bounded by
+     * fidelity, not by any era's limiter.</p>
+     */
+    private static final int RETHROW_MIN_TICKS = 4;
     /**
      * Shortest heal-juke hold (ticks) on one side; holds walk a side-balanced
      * palindrome over {@link #JUKE_HOLD_SPAN} lengths (2,3,4,5,5,4,3,2) from a
@@ -106,11 +141,12 @@ public final class PotHealGoal implements Goal {
     private static final int THROW_FAIL_CAP = 3;
     /**
      * Hard ceiling on time spent in the phase-0 retreat before drinking anyway. A
-     * same-speed chaser keeps the gap constant, so the {@link #RETREAT_DISTANCE}
+     * same-speed chaser keeps the gap constant, so the {@link #THROW_GATE_DISTANCE}
      * gate alone can never become true — drinking under pressure beats an infinite
-     * backpedal.
+     * backpedal, and a shorter leash means the first pot flies while the fight is
+     * still winnable.
      */
-    public static final int RETREAT_TICK_CAP = 40;
+    public static final int RETREAT_TICK_CAP = 16;
 
     private static final String STATE_ID = "potHeal";
     private static final int PHASE = 0;
@@ -157,7 +193,7 @@ public final class PotHealGoal implements Goal {
         // Eligibility gate: a mortal, self-heal-enabled boxer that actually has
         // pots and someone to disengage from. Anything else fully disarms.
         if (s.invincible() || !heal.enabled() || !p.inv().hasPots() || !p.hasTarget()) {
-            latched = false;
+            releaseLatch();
             setGaveUp(false);
             return 0.0;
         }
@@ -170,7 +206,7 @@ public final class PotHealGoal implements Goal {
         if (hp20 >= heal.resumeHealth()) {
             // Genuine recovery: release the heal latch AND clear the give-up latch,
             // so a future health drop starts a fresh episode with a full pot budget.
-            latched = false;
+            releaseLatch();
             setGaveUp(false);
         } else if (hp20 <= heal.triggerHealth()) {
             // At/below the trigger. Re-arm ONLY if we have not already spent this
@@ -221,6 +257,32 @@ public final class PotHealGoal implements Goal {
             st[POTS_THROWN] = 0;
             st[FAIL_STREAK] = 0;
         }
+    }
+
+    /**
+     * Release the hysteresis latch, ABORTING any episode in flight. The moment
+     * the latch drops, {@code utility} returns 0 with the very perception
+     * {@code decide} would have seen, so the FSM can never run its own cleanup
+     * arm on the recovery path — without this abort it parks mid-phase (a
+     * half-spent confirm window, a stale {@code launchBase}) while the hand
+     * machine's weapon baseline re-arms the sword. A later re-trigger resuming
+     * that stale park would phantom-confirm the PREVIOUS episode's launch and
+     * then rethrow with the ledger off the pot slot — a use the hand machine
+     * silently drops, which repeated is a fail-streak give-up on a boxer whose
+     * pots are fine (the 1.17.1 pot-budget integration failure). Aborting to
+     * phase 0 makes every latch a fresh episode whose retreat front-loads the
+     * pot swap, so the "pot in hand" rethrow invariant is re-established by
+     * construction. Mid-episode counters only; the budget/give-up ledgers keep
+     * their own lifecycles ({@link #resetEpisode}, {@link #setGaveUp}).
+     */
+    private void releaseLatch() {
+        if (latched && owned != null) {
+            int[] st = owned.ints(STATE_ID, STATE_SIZE);
+            st[PHASE] = 0;
+            st[WAIT_TIMER] = 0;
+            st[RETREAT_TICKS] = 0;
+        }
+        latched = false;
     }
 
     /**
@@ -308,30 +370,51 @@ public final class PotHealGoal implements Goal {
         int phase = st[PHASE];
 
         switch (phase) {
-            case 0: // create space — sprint straight away until we have room
-                // Advance once we have distance OR the retreat has run long enough: a
-                // same-speed chaser pins the gap, so waiting on distance alone would
-                // deadlock here forever (exclusive + suppressesAttack) and never heal.
+            case 0: // create space — sprint straight away, with the wind-up
+                    // FRONT-LOADED into the retreat: the first tick swaps to the
+                    // pot slot and every tick faces the throw aim (its yaw IS the
+                    // flee line, so the sprint is unaffected while pitch settles),
+                    // so the tick the gate opens the pot flies immediately instead
+                    // of spending another swap-and-aim tick standing tall.
+                    // Advance once we have distance OR the retreat has run long
+                    // enough: a same-speed chaser pins the gap, so waiting on
+                    // distance alone would deadlock here forever (exclusive +
+                    // suppressesAttack) and never heal.
+                boolean firstRetreatTick = st[RETREAT_TICKS] == 0;
                 st[RETREAT_TICKS] = st[RETREAT_TICKS] + 1;
-                if (t.distance() > RETREAT_DISTANCE || st[RETREAT_TICKS] >= RETREAT_TICK_CAP) {
-                    st[PHASE] = 1;
+                if (t.distance() > THROW_GATE_DISTANCE || st[RETREAT_TICKS] >= RETREAT_TICK_CAP) {
+                    st[PHASE] = 2;
                     st[RETREAT_TICKS] = 0;
                 }
-                return new Intent(awayDir, Intent.FacingIntent.faceMove(),
-                        Intent.ActionIntent.none(), true, Intent.JumpHint.NONE);
+                return new Intent(awayDir, throwAim,
+                        firstRetreatTick
+                                ? Intent.ActionIntent.selectSlot(s.items().potSlot())
+                                : Intent.ActionIntent.none(),
+                        true, Intent.JumpHint.NONE);
 
-            case 1: // swap to the pot slot, keep sprinting away, and START pitching
-                    // down a tick EARLY: the aim spring needs a tick to reach the
-                    // throw angle, so the pot leaves on-angle next tick instead of
-                    // sailing out shallow.
+            case 1: // compat entry (stale persisted state): swap + aim, then throw.
                 st[PHASE] = 2;
                 return new Intent(awayDir, throwAim,
                         Intent.ActionIntent.selectSlot(s.items().potSlot()),
                         true, Intent.JumpHint.NONE);
 
-            case 2: // throw on the run, weaving: record the launch baseline BEFORE
-                    // the use, so phase 3 can tell a server-confirmed launch from a
-                    // silently swallowed use-item.
+            case 2: // throw on the run, weaving. FIRST the ledger check: the
+                    // rethrow loop (3 -> 2) assumes the pot stayed in hand, but a
+                    // mid-episode seizure by another exclusive goal can move the
+                    // hand machine's ledger off the pot slot — and the machine
+                    // SILENTLY drops a StartUse whose slot disagrees with its
+                    // ledger (it never re-swaps toward a goal's wish on its own).
+                    // Throwing blind would burn the whole fail streak on an
+                    // empty-handed spam; a player re-presses the pot key instead,
+                    // one tick, and the route moves the ledger this same tick so
+                    // the next phase-2 tick throws for real.
+                if (mem.hand.intendedSlot != s.items().potSlot()) {
+                    return new Intent(awayDir, throwAim,
+                            Intent.ActionIntent.selectSlot(s.items().potSlot()),
+                            true, Intent.JumpHint.NONE);
+                }
+                // Record the launch baseline BEFORE the use, so phase 3 can tell
+                // a server-confirmed launch from a silently swallowed use-item.
                 st[LAUNCH_BASE] = p.combat().potsLaunched();
                 st[WAIT_TIMER] = WAIT_TICKS;
                 st[PHASE] = 3;
@@ -339,12 +422,16 @@ public final class PotHealGoal implements Goal {
                         Intent.ActionIntent.throwUse(s.items().potSlot()), true,
                         Intent.JumpHint.NONE);
 
-            case 3: // weave through the splash while the launch confirms; when the
-                    // window settles: count ONLY a confirmed throw, then recover,
-                    // retry, repeat, or give up.
+            case 3: // weave while the launch confirms. A CONFIRMED launch settles
+                    // the window at the rethrow floor (a pot-spammer's cadence,
+                    // ~5 ticks/pot); the full window is only the FAILURE timeout.
+                    // On settle: count ONLY a confirmed throw, then recover,
+                    // rethrow (straight back to the throw — the pot is still in
+                    // hand), or give up.
                 st[WAIT_TIMER] = st[WAIT_TIMER] - 1;
-                if (st[WAIT_TIMER] <= 0) {
-                    boolean launched = p.combat().potsLaunched() > st[LAUNCH_BASE];
+                boolean launched = p.combat().potsLaunched() > st[LAUNCH_BASE];
+                boolean pastRethrowFloor = WAIT_TICKS - st[WAIT_TIMER] >= RETHROW_MIN_TICKS;
+                if ((launched && pastRethrowFloor) || st[WAIT_TIMER] <= 0) {
                     if (launched) {
                         st[POTS_THROWN] = st[POTS_THROWN] + 1;
                         st[FAIL_STREAK] = 0;
@@ -358,7 +445,7 @@ public final class PotHealGoal implements Goal {
                     boolean recovered = hp20 >= s.selfHeal().resumeHealth();
                     boolean capped = st[POTS_THROWN] >= s.selfHeal().splashCap();
                     boolean broken = st[FAIL_STREAK] >= THROW_FAIL_CAP;
-                    st[PHASE] = (recovered || capped || broken) ? 4 : 1;
+                    st[PHASE] = (recovered || capped || broken) ? 4 : 2;
                 }
                 return new Intent(healJuke(awayDir, t.distance(), mem), throwAim,
                         Intent.ActionIntent.none(), true, Intent.JumpHint.NONE);
