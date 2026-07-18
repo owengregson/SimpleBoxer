@@ -57,9 +57,22 @@ final class TestEnvironment implements Listener {
             for (String rule : SPAWN_RULES) {
                 off(world, rule);
             }
-            world.setTime(6_000L); // noon, and doDaylightCycle=false pins it
-            world.setStorm(false);
-            world.setThundering(false);
+            // Cosmetic stabilizers only — the embargo layers above/below carry the
+            // hermetic guarantee. 26.x preview worlds without a world clock THROW
+            // on setTime ("Cannot set time in world without world clock"), and a
+            // fixed-weather world may reject weather writes; neither may take the
+            // tester down with it.
+            try {
+                world.setTime(6_000L); // noon, and doDaylightCycle=false pins it
+            } catch (RuntimeException clocklessWorld) {
+                // leave the world's native time source alone
+            }
+            try {
+                world.setStorm(false);
+                world.setThundering(false);
+            } catch (RuntimeException fixedWeather) {
+                // leave the weather state alone
+            }
             for (Entity entity : world.getEntities()) {
                 if (hostile(entity)) {
                     entity.remove();
